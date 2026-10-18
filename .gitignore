@@ -1,0 +1,82 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+.kotlin
+
+### IntelliJ IDEA ###
+.idea/modules.xml
+.idea/jarRepositories.xml
+.idea/compiler.xml
+.idea/libraries/
+*.iws
+*.iml
+*.ipr
+
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
+
+# Maven build output
+/target/
+
+# Local IDE configuration; Maven remains the project definition
+/.idea/
+/.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local configuration and logs
+.env
+.env.*
+!.env.example
+*.log
+
+# JVM diagnostics and profiling output
+hs_err_pid*
+replay_pid*
+*.hprof
+*.jfr
+
+# Personal audio and local runtime/test data
+*.mp3
+*.MP3
+*.flac
+*.wav
+*.m4a
+*.aac
+*.ogg
+*.opus
+/test-media/
+/local-data/
+/cache/
+
+# Keep intentional Maven project configuration and future wrapper files tracked.
+# Do not add a rule ignoring .mvn/ or all .jar files.

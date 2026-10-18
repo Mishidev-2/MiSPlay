@@ -1,0 +1,20 @@
+# Changelog
+
+Completed changes are recorded here. Planned work belongs in the README or development notes. Entries under **Unreleased** have not been published as a tagged release.
+
+## Unreleased
+
+### Added
+
+- A fresh MiSPlay Maven project targeting Java 25 with JavaFX controls and media support.
+- A JavaFX window with MP3 file selection and Play/Pause controls.
+- An `AudioService` that owns the active media player and releases it when a track is replaced or the application closes.
+- Filename display and error reporting for immediate and asynchronous playback failures.
+- Initial README, architecture notes, manual-check instructions and Git setup documentation.
+- Git ignore rules and text line-ending configuration.
+
+### Verification
+
+- Maven validation and JavaFX window launch were confirmed on Windows 11.
+- Basic MP3 playback was confirmed by the developer.
+- Detailed manual-check results and memory/CPU profiling have not yet been recorded.
