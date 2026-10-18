@@ -11,6 +11,7 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
+import javafx.scene.control.Slider;
 
 import java.io.File;
 
@@ -62,10 +63,45 @@ public class MiSPlayApp extends Application {
         playButton.setOnAction(event -> audioService.play());
         pauseButton.setOnAction(event -> audioService.pause());
 
+        Slider volumeSlider = new Slider(
+                0,
+                100,
+                audioService.getVolume() * 100
+        );
+        volumeSlider.setPrefWidth(220);
+
+        Label volumeValue = new Label(
+                Math.round(volumeSlider.getValue()) + "%"
+        );
+        volumeValue.setMinWidth(45);
+
+        volumeSlider.valueProperty().addListener(
+                (observable, oldValue, newValue) -> {
+                    double percentage = newValue.doubleValue();
+
+                    audioService.setVolume(percentage / 100.0);
+                    volumeValue.setText(Math.round(percentage) + "%");
+                }
+        );
+
+        HBox volumeControls = new HBox(
+                10,
+                new Label("Volume"),
+                volumeSlider,
+                volumeValue
+        );
+        volumeControls.setAlignment(Pos.CENTER);
+
         HBox controls = new HBox(10, openButton, playButton, pauseButton);
         controls.setAlignment(Pos.CENTER);
 
-        VBox root = new VBox(15, trackLabel, controls, errorLabel);
+        VBox root = new VBox(
+                15,
+                trackLabel,
+                controls,
+                volumeControls,
+                errorLabel
+        );
         root.setAlignment(Pos.CENTER);
         root.setPadding(new Insets(20));
 

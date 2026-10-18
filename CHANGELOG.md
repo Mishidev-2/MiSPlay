@@ -12,7 +12,8 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Filename display and error reporting for immediate and asynchronous playback failures.
 - Initial README, architecture notes, manual-check instructions and Git setup documentation.
 - Git ignore rules and text line-ending configuration.
-
+- Adjustable application volume, retained across track changes during the current session.
+- 
 ### Verification
 
 - Maven validation and JavaFX window launch were confirmed on Windows 11.

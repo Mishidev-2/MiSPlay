@@ -18,7 +18,7 @@ The current checkpoint is local MP3 playback. Library scanning, metadata service
 1. The user chooses an MP3 in the file chooser.
 2. `MiSPlayApp` updates the filename, clears the old error and calls `loadAndPlay(file)`.
 3. `AudioService` disposes of the previous player, creates `Media` from the file URI and creates a replacement `MediaPlayer`.
-4. Error callbacks and end-of-media behavior are attached to the replacement player. Its starting volume is 0.5.
+4. Error callbacks and end-of-media behavior are attached to the replacement player. The player receives the volume stored in `AudioService`, which defaults to 0.5 (50%) when the application starts.
 5. Playback is requested. JavaFX completes media preparation asynchronously.
 
 Play and Pause buttons delegate to service methods. They do not maintain a separate `isPlaying` flag. At the natural end of a track, the current callback stops the player so the file can be played again from the beginning.
@@ -37,6 +37,16 @@ Synchronous construction failures are caught by `loadAndPlay`. Later media/playe
 - `Application.stop()` delegates to the service's disposal method during normal shutdown.
 - Use file URIs for `Media`; do not construct media locations by manually concatenating Windows path separators.
 
+### Volume control
+
+`AudioService` stores the current volume as a number from 0.0 to 1.0. `setVolume()` keeps the value within that range and updates the active player when one exists.
+
+`MiSPlayApp` displays a slider from 0 to 100. Its value-change listener divides the percentage by 100 before passing it to `AudioService.setVolume()`.
+
+Every replacement player receives the stored volume. Volume can also be adjusted before opening a track.
+
+The setting lasts for the current application session. Each application launch starts at 50%.
+
 ### Threading
 
 Current service calls originate from JavaFX event handlers. Keep UI updates on the JavaFX Application Thread. JavaFX handles asynchronous media preparation; a custom audio playback thread is not needed for this implementation.
@@ -50,7 +60,7 @@ Use MP3 files outside the Git repository. A small set of known working files is 
 | ID | Action | Expected result |
 | --- | --- | --- |
 | M01 | Launch with `javafx:run` | MiSPlay opens; Play and Pause start disabled |
-| M02 | Open a known working MP3 | Filename is displayed and audio starts at 50% application volume |
+| M02 | Open a known working MP3 | Filename is displayed and audio starts at the current volume setting, which defaults to 50% |
 | M03 | Pause during playback | Audio pauses without closing the application |
 | M04 | Play after pausing | Playback resumes from the paused position |
 | M05 | Open a second MP3 while the first plays | The first track stops and only the second track is heard |
@@ -60,6 +70,11 @@ Use MP3 files outside the Git repository. A small set of known working files is 
 | M09 | Open a valid MP3 after M08 | The application recovers and plays the file |
 | M10 | Open a file whose path contains spaces or non-ASCII characters | The file opens normally if its MP3 encoding is supported |
 | M11 | Close the application while audio plays | Audio stops and the Maven run finishes |
+| M12 | Set volume to 20% before opening the first MP3 | The file starts using the selected volume and the slider remains at 20% |
+| M13 | Adjust volume during playback, including 0% | Volume changes immediately; 0% silences the audio |
+| M14 | Set volume to 20%, then open another MP3 | The replacement track uses the stored volume and the slider remains at 20% |
+| M15 | Pause, change volume, then resume | Playback resumes using the new volume |
+| M16 | Close and reopen MiSPlay | Volume starts at the default 50% |
 
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
@@ -101,7 +116,6 @@ For later checkpoints, update `CHANGELOG.md` when functionality changes. Update 
 
 ## Upcoming implementation notes
 
-- Keep volume in `AudioService` so loading another player can reuse it.
 - Read progress and duration from the playback API. Do not infer time from bytes consumed.
 - Handle unknown/invalid duration while media loads, and prevent automatic slider updates from fighting user seeking.
 - Attach callbacks to every replacement player. Store service-level callback intentions if consumers register before any player exists.

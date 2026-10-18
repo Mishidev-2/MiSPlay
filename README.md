@@ -7,7 +7,8 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 ## Current features
 
 - Select a local MP3 using a file chooser.
-- Automatically play the selected file at 50% application volume.
+- Automatically play selected MP3 files using the current volume setting.
+- Adjust volume from 0% to 100%, retaining the setting across track changes during the current session.
 - Pause and resume playback.
 - Replace the current track when another MP3 is opened.
 - Display the selected filename and playback errors.
@@ -70,7 +71,6 @@ Run the [manual playback checks](docs/DEVELOPMENT.md#manual-checks) before commi
 
 ## Next milestone
 
-- Volume control that retains its setting when switching tracks.
 - Playback time and duration display.
 - Seeking without fighting playback-driven slider updates.
 

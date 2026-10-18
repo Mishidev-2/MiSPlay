@@ -11,6 +11,7 @@ public class AudioService {
 
     private MediaPlayer player;
     private final Consumer<String> errorHandler;
+    private double volume = 0.5;
 
     public AudioService(Consumer<String> errorHandler) {
         this.errorHandler = errorHandler;
@@ -31,7 +32,7 @@ public class AudioService {
                     handleError(nextPlayer, nextPlayer.getError()));
 
             nextPlayer.setOnEndOfMedia(nextPlayer::stop);
-            nextPlayer.setVolume(0.5);
+            nextPlayer.setVolume(volume);
             nextPlayer.play();
 
         } catch (RuntimeException error) {
@@ -57,6 +58,18 @@ public class AudioService {
             MediaPlayer previousPlayer = player;
             player = null;
             previousPlayer.dispose();
+        }
+    }
+
+    public double getVolume() {
+        return volume;
+    }
+
+    public void setVolume(double newVolume) {
+        volume = Math.max(0.0, Math.min(1.0, newVolume));
+
+        if (player != null) {
+            player.setVolume(volume);
         }
     }
 
