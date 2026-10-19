@@ -13,7 +13,7 @@ The current checkpoint is local MP3 playback. Library scanning, metadata service
 | `MiSPlayApp` | JavaFX controls, the file chooser, displayed messages and the `AudioService` instance | Media decoding and audio resource management |
 | `AudioService` | The current `MediaPlayer`, playback requests, error handling and disposal | Windows, buttons, labels or library rendering |
 | `LibraryService` | Owns the session-only song collection, exposes a read-only observable view and prevents duplicate file paths during import. |
-| `PlaybackQueue` | Captures queue order, tracks the current position and applies navigation and repeat rules. |
+| `PlaybackQueue` | Stores original and active queue orders, tracks the current position, and applies navigation, repeat and shuffle rules. |
 | `RepeatMode` | Defines the available repeat choices: OFF, ALL and ONE. |
 ### Opening a track
 
@@ -51,7 +51,7 @@ The setting lasts for the current application session. Each application launch s
 
 ### Playback queue
 
-`PlaybackQueue` is a plain Java class containing a captured list of files, a current index and a repeat mode.
+`PlaybackQueue` is a plain Java class containing the captured original order, the active playback order, a current index, a repeat mode and a shuffle flag.
 
 Starting playback from a song-list row captures the current visible results using `List.copyOf`. Later searches and imports do not change that queue. Activating another row creates a new queue. Open MP3 creates a single-song queue.
 
@@ -70,6 +70,26 @@ Previous and Next are disabled for empty and single-song queues in every mode. A
 Changing the repeat mode updates the controls without starting, pausing or restarting playback.
 
 Starting another queue preserves the chosen repeat mode. The choice is currently session-only and resets to OFF when the application restarts.
+
+### Shuffle playback
+
+Shuffle defaults to OFF and is controlled through a JavaFX `ToggleButton`.
+
+`originalTracks` stores the file order captured when the queue starts. `tracks` stores the active playback order. Both lists contain file references rather than loaded audio.
+
+Enabling shuffle during an existing queue preserves entries up to and including the current position. Only entries after that position are shuffled.
+
+Starting a new queue while shuffle is enabled places the selected song first and shuffles all remaining entries.
+
+Shuffling uses a temporary `ArrayList` and `Collections.shuffle`. The resulting order is stored using `List.copyOf`.
+
+Previous and Next move through the same active order. Repeat All loops through that order again. Repeat One replays the current song, while manual navigation continues to use the active order.
+
+Disabling shuffle restores `originalTracks` and finds the current song's position within it. Subsequent navigation follows that original captured order.
+
+Toggling shuffle updates queue state and controls without reloading audio, preserving playback position and paused state.
+
+Searches and imports do not change the active queue. Starting another queue preserves the shuffle setting, which resets to OFF when the application restarts.
 
 ### Seeking
 
@@ -155,7 +175,7 @@ When scanning or metadata reading is added, perform filesystem traversal and exp
 
 Use MP3 files outside the Git repository. A small set of known working files is sufficient. Record actual results; these rows are a checklist, not a claim that every case has passed.
 
-Unless a check specifies another repeat mode, run it with Repeat OFF.
+Unless a check specifies otherwise, start it with Repeat OFF and Shuffle OFF.
 
 | ID | Action | Expected result |
 | --- | --- | --- |
@@ -221,6 +241,17 @@ Unless a check specifies another repeat mode, run it with Repeat OFF.
 | M60 | Pause playback, then change repeat mode. | Playback remains paused and the controls reflect the new mode. |
 | M61 | Search or import files while a captured queue is playing with Repeat ALL. | Playback continues and loops through the original captured queue. |
 | M62 | Change repeat mode, start another queue, then restart the app. | New queues retain the mode and volume during the session; restarting resets repeat to OFF. |
+| M63 | Launch the app and toggle shuffle with an empty queue. | Shuffle starts OFF; toggling causes no error. |
+| M64 | Toggle shuffle during playback and while paused. | Playback position is preserved; paused playback remains paused. |
+| M65 | Enable shuffle and activate a middle song in a multi-song list. Advance through the queue. | The selected song plays first; every captured song appears once before the queue ends. |
+| M66 | Navigate backward and forward through a shuffled queue. | Previous and Next retrace the same order. |
+| M67 | Start an ordinary queue, advance once, then enable shuffle. | Earlier entries and the current song retain their positions; only upcoming entries are shuffled. |
+| M68 | Disable shuffle during playback. | The current song continues; navigation follows the original captured order. |
+| M69 | With shuffle enabled, test Repeat ALL and ONE. | ALL loops through the same shuffled order. ONE repeats the current song; manual Next skips when available. |
+| M70 | Search and import files during shuffled playback, then activate another row. | The active queue stays unchanged until row activation captures a fresh queue from the visible results. |
+| M71 | Use Open MP3 with shuffle enabled; test Repeat ALL and ONE. | The queue contains one song, navigation buttons remain disabled, and automatic repeat works. |
+| M72 | Start another queue with shuffle enabled, then restart the app. | Shuffle remains enabled between queues during the session and resets to OFF after restart. |
+
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
 For a check failure, record the check ID, exact action, error text, JDK/JavaFX versions and whether the same file works elsewhere. Do not commit personal audio files as evidence.

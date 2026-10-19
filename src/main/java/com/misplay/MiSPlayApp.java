@@ -1,34 +1,39 @@
 package com.misplay;
 
 import com.misplay.model.PlaybackQueue;
+import com.misplay.service.AudioService;
 import com.misplay.model.RepeatMode;
 import com.misplay.service.LibraryService;
+
+import javafx.scene.Scene;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.VBox;
+
+import javafx.scene.control.Slider;
+import javafx.scene.control.TextField;
+import javafx.scene.control.Button;
+import javafx.scene.control.Label;
+import javafx.scene.control.ToggleButton;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.Priority;
 
 import java.util.List;
 import java.util.function.Consumer;
-
-import javafx.collections.transformation.FilteredList;
-import javafx.scene.control.TextField;
-
 import java.util.Locale;
 
-import com.misplay.service.AudioService;
+import javafx.collections.transformation.FilteredList;
+
 import javafx.application.Application;
+
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
-import javafx.scene.Scene;
-import javafx.scene.control.Button;
-import javafx.scene.control.Label;
-import javafx.scene.layout.HBox;
-import javafx.scene.layout.VBox;
+
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
-import javafx.scene.control.Slider;
 
 import javafx.beans.binding.Bindings;
 import javafx.util.Duration;
@@ -55,14 +60,31 @@ public class MiSPlayApp extends Application {
         Button previousButton = new Button("Previous");
         Button nextButton = new Button("Next");
         Button repeatButton = new Button();
+        ToggleButton shuffleButton = new ToggleButton();
 
         Runnable updateQueueButtons = () -> {
             previousButton.setDisable(!playbackQueue.hasPrevious());
             nextButton.setDisable(!playbackQueue.hasNext());
-            repeatButton.setText("Repeat: " + playbackQueue.getRepeatMode());
+
+            repeatButton.setText(
+                    "Repeat: " + playbackQueue.getRepeatMode()
+            );
+
+            shuffleButton.setSelected(playbackQueue.isShuffleEnabled());
+
+            shuffleButton.setText(
+                    playbackQueue.isShuffleEnabled()
+                            ? "Shuffle: ON"
+                            : "Shuffle: OFF"
+            );
         };
 
         updateQueueButtons.run();
+
+        shuffleButton.setOnAction(event -> {
+            playbackQueue.setShuffleEnabled(shuffleButton.isSelected());
+            updateQueueButtons.run();
+        });
 
         repeatButton.setOnAction(event -> {
             RepeatMode mode = switch (playbackQueue.getRepeatMode()) {
@@ -344,10 +366,18 @@ public class MiSPlayApp extends Application {
                 previousButton,
                 playButton,
                 pauseButton,
-                nextButton,
-                repeatButton
+                nextButton
         );
+
         controls.setAlignment(Pos.CENTER);
+
+        HBox playbackOptions = new HBox(
+                10,
+                repeatButton,
+                shuffleButton
+        );
+
+        playbackOptions.setAlignment(Pos.CENTER);
 
         VBox root = new VBox(
                 12,
@@ -357,6 +387,7 @@ public class MiSPlayApp extends Application {
                 timeLabel,
                 seekSlider,
                 controls,
+                playbackOptions,
                 volumeControls,
                 errorLabel
         );

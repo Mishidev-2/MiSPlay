@@ -24,6 +24,9 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Single-song queues when opening an MP3 directly.
 - Automatic advancement through the captured playback queue, preserving volume between tracks.
 - Repeat Off, Repeat All and Repeat One, including queue wrapping and manual skipping while repeating one song.
+- Session-only shuffle playback, preserving the current song when toggled.
+- Stable navigation through shuffled queues, including Repeat All support and restoration of the captured order when shuffle is disabled.
+
 ### Verification
 
 - Maven validation and JavaFX window launch were confirmed on Windows 11.

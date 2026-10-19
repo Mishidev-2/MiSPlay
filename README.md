@@ -28,6 +28,7 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Automatically advance through the captured playback queue.
 - Finish silently at zero after the final queued song.
 - Repeat Off, Repeat All and Repeat One, with manual track navigation.
+- Shuffle playback with consistent Previous/Next navigation and restoration of the original queue order when disabled.
 
 ## Technology
 
@@ -86,7 +87,7 @@ Run the [manual playback checks](docs/DEVELOPMENT.md#manual-checks) before commi
 
 ## Next milestone
 
-- Add shuffle playback.
+- Read and display song titles, artists and albums from MP3 metadata.
 
 ## Planned features
 
