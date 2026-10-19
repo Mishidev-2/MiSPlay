@@ -96,6 +96,22 @@ The double-click handler reads the cell's current item when clicked, ensuring re
 
 The collection exists only for the current application session and starts empty on the next launch.
 
+### Filename search
+
+`MiSPlayApp` wraps the library's complete collection in a `FilteredList<File>` and supplies that filtered view to the song list.
+
+Changes to the search field update the filter predicate. Queries have surrounding whitespace removed and are converted to lowercase using `Locale.ROOT`. Matching checks whether the lowercase filename contains the query. Empty or whitespace-only queries show every file.
+
+Filtering controls which rows are visible while preserving the complete library collection. Playback continues independently, including when the playing file is hidden by the search.
+
+Row activation uses the `File` associated with the current result, ensuring double-click and Enter play the displayed file.
+
+New imports automatically pass through the active filter. Duplicate prevention still checks the complete collection, including hidden files.
+
+The placeholder shows an import instruction when the library is empty and a no-results message when a populated library has no matching files.
+
+Filtering runs in JavaFX text-change handlers and examines filenames already in memory.
+
 ### Threading
 
 Current service calls originate from JavaFX event handlers. Keep UI updates on the JavaFX Application Thread. JavaFX handles asynchronous media preparation; a custom audio playback thread is not needed for this implementation.
@@ -142,6 +158,13 @@ Use MP3 files outside the Git repository. A small set of known working files is 
 | M32 | Cancel either file dialog during playback | Collection and playback remain unchanged |
 | M33 | Resize and scroll while playing | List uses available space, rows display correctly and audio continues |
 | M34 | Close and reopen MiSPlay | Song list starts empty |
+| M35 | Search for part of a filename using different capitalization | Matching files appear regardless of query capitalization |
+| M36 | Clear the query or enter only whitespace | The complete collection appears |
+| M37 | Search a populated library using a query with no matches | The no-results message appears |
+| M38 | Filter out the currently playing file | Audio and playback-time updates continue |
+| M39 | Double-click a filtered result or select it and press Enter | The displayed file starts playing |
+| M40 | Import files while searching | Matching files appear immediately; other files appear after clearing the search |
+| M41 | Re-import a file hidden by the filter, then clear the search | Only one entry exists for that path |
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
 For a check failure, record the check ID, exact action, error text, JDK/JavaFX versions and whether the same file works elsewhere. Do not commit personal audio files as evidence.

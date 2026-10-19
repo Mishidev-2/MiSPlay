@@ -10,6 +10,11 @@ import javafx.scene.layout.Priority;
 import java.util.List;
 import java.util.function.Consumer;
 
+import javafx.collections.transformation.FilteredList;
+import javafx.scene.control.TextField;
+
+import java.util.Locale;
+
 import com.misplay.service.AudioService;
 import javafx.application.Application;
 import javafx.geometry.Insets;
@@ -152,12 +157,41 @@ public class MiSPlayApp extends Application {
             libraryService.addFiles(selectedFiles);
         });
 
-        ListView<File> songList =
-                new ListView<>(libraryService.getTracks());
+        FilteredList<File> filteredTracks =
+                new FilteredList<>(libraryService.getTracks(), file -> true);
 
-        songList.setPlaceholder(
-                new Label("Use Add MP3s to build your song list.")
+        ListView<File> songList = new ListView<>(filteredTracks);
+
+        TextField searchField = new TextField();
+        searchField.setPromptText("Search filenames...");
+
+        searchField.textProperty().addListener(
+                (observable, oldText, newText) -> {
+                    String query = newText == null
+                            ? ""
+                            : newText.strip().toLowerCase(Locale.ROOT);
+
+                    filteredTracks.setPredicate(file ->
+                            query.isEmpty()
+                                    || file.getName()
+                                    .toLowerCase(Locale.ROOT)
+                                    .contains(query)
+                    );
+                }
         );
+
+        Label emptyLabel = new Label();
+
+        emptyLabel.textProperty().bind(
+                Bindings.createStringBinding(
+                        () -> libraryService.getTracks().isEmpty()
+                                ? "Use Add MP3s to build your song list."
+                                : "No songs match your search.",
+                        libraryService.getTracks()
+                )
+        );
+
+        songList.setPlaceholder(emptyLabel);
 
         songList.setFixedCellSize(32);
         songList.setMinHeight(120);
@@ -238,6 +272,7 @@ public class MiSPlayApp extends Application {
 
         VBox root = new VBox(
                 12,
+                searchField,
                 songList,
                 trackLabel,
                 timeLabel,

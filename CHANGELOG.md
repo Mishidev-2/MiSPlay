@@ -18,6 +18,7 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Seeking while paused and after track completion, with immediate position display updates.
 - Session-only song library with batch MP3 import and duplicate-path prevention.
 - Resizable, virtualized song list with filename display and playback through double-click or Enter.
+- Live filename search with case-insensitive matching, whitespace trimming and a no-results message.
 
 ### Verification
 
