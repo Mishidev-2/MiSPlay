@@ -22,8 +22,8 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Manual playback queue navigation with Previous/Next controls and disabled buttons at queue boundaries.
 - Queues captured from visible song-list results, preserved across searches and imports.
 - Single-song queues when opening an MP3 directly.
-- Automatic advancement through the captured playback queue, preserving volume and ending silently after the final song.
-
+- Automatic advancement through the captured playback queue, preserving volume between tracks.
+- Repeat Off, Repeat All and Repeat One, including queue wrapping and manual skipping while repeating one song.
 ### Verification
 
 - Maven validation and JavaFX window launch were confirmed on Windows 11.

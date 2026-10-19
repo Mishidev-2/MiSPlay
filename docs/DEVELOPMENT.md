@@ -13,7 +13,8 @@ The current checkpoint is local MP3 playback. Library scanning, metadata service
 | `MiSPlayApp` | JavaFX controls, the file chooser, displayed messages and the `AudioService` instance | Media decoding and audio resource management |
 | `AudioService` | The current `MediaPlayer`, playback requests, error handling and disposal | Windows, buttons, labels or library rendering |
 | `LibraryService` | Owns the session-only song collection, exposes a read-only observable view and prevents duplicate file paths during import. |
-| `PlaybackQueue` | Stores playback order and the current position; prevents navigation past the first or last entry. |
+| `PlaybackQueue` | Captures queue order, tracks the current position and applies navigation and repeat rules. |
+| `RepeatMode` | Defines the available repeat choices: OFF, ALL and ONE. |
 ### Opening a track
 
 1. The user chooses an MP3 in the file chooser.
@@ -48,19 +49,27 @@ Every replacement player receives the stored volume. Volume can also be adjusted
 
 The setting lasts for the current application session. Each application launch starts at 50%.
 
-### Playback time
+### Playback queue
 
-`AudioService` exposes read-only `currentTimeProperty()` and `durationProperty()` values.
+`PlaybackQueue` is a plain Java class containing a captured list of files, a current index and a repeat mode.
 
-A listener copies playback-position updates from the active `MediaPlayer` into the service's current-time property. Updates from replaced players are ignored.
+Starting playback from a song-list row captures the current visible results using `List.copyOf`. Later searches and imports do not change that queue. Activating another row creates a new queue. Open MP3 creates a single-song queue.
 
-The service also publishes requested seek positions immediately so the display updates while paused. Subsequent player notifications update the position during playback.
+The shared `playFile` action starts a file and updates the playback display, visible selection and navigation buttons. Manual Previous and Next start the selected track even when playback was paused.
 
-Duration remains bound to the source media's duration property. `MiSPlayApp` binds its time label to the two service properties. No application polling timer is used.
+Repeat defaults to OFF:
 
-`formatTime()` displays minutes and seconds, adding hours for longer recordings. Unavailable or invalid values display as `--:--`.
+| Mode | Natural completion | Manual Previous and Next |
+| --- | --- | --- |
+| OFF | Advance to the next track; remain silent after the final track. | Stop at the queue boundaries. |
+| ALL | Advance and wrap from the final track to the first. | Wrap around a queue containing multiple tracks. |
+| ONE | Replay the current track. | Move normally, stopping at the queue boundaries. |
 
-During disposal, the service clears its active-player reference, unbinds duration, resets both time properties and disposes of the previous player.
+Previous and Next are disabled for empty and single-song queues in every mode. A single song can still repeat automatically in ALL or ONE.
+
+Changing the repeat mode updates the controls without starting, pausing or restarting playback.
+
+Starting another queue preserves the chosen repeat mode. The choice is currently session-only and resets to OFF when the application restarts.
 
 ### Seeking
 
@@ -74,19 +83,15 @@ Dragging seeks when the handle is released. Track clicks and keyboard adjustment
 
 ### Track completion
 
-Every new `MediaPlayer` receives completion and stopped-state handlers.
+When the active player finishes while playing, `AudioService` requests a stop and invokes its stored `onTrackFinished` callback.
 
-The completion handler ignores replaced players, records whether the active player was playing, requests a stop and invokes the service's `onTrackFinished` callback when appropriate.
+`MiSPlayApp` handles this callback by calling `PlaybackQueue.nextAfterCompletion()`. If a file is returned, the shared `playFile` action starts it and updates the playback display, visible selection and navigation buttons. Volume carries over.
 
-`MiSPlayApp` registers the shared `playNext` action as that callback. Both the Next button and automatic advancement move through the existing queue and delegate playback to `playFile`.
+If no file is returned, playback remains silent at zero. The stopped-state handler pauses the still-active player so seeking and replay remain available.
 
-The callback is stored on `AudioService`, so it remains registered when individual players are replaced.
+Manual Next uses `PlaybackQueue.next()` instead. Keeping these actions separate allows Repeat One to replay a completed song while still allowing the user to skip it manually.
 
-When another queued file exists, playback starts that file and updates the playback display, visible selection and navigation buttons. Volume carries over.
-
-After the final entry, playback returns to zero and remains silent. The stopped-state handler pauses the still-active player so seeking and replay remain available.
-
-Player identity checks prevent delayed callbacks from a replaced player from affecting its replacement.
+The completion callback remains registered when individual players are replaced. Player identity checks prevent delayed callbacks from affecting a replacement player.
 
 ### Song list
 
@@ -150,6 +155,8 @@ When scanning or metadata reading is added, perform filesystem traversal and exp
 
 Use MP3 files outside the Git repository. A small set of known working files is sufficient. Record actual results; these rows are a checklist, not a claim that every case has passed.
 
+Unless a check specifies another repeat mode, run it with Repeat OFF.
+
 | ID | Action | Expected result |
 | --- | --- | --- |
 | M01 | Launch with `javafx:run` | MiSPlay opens; Play and Pause start disabled |
@@ -206,6 +213,14 @@ Use MP3 files outside the Git repository. A small set of known working files is 
 | M52 | Adjust volume before an automatic transition | The next song uses the selected volume |
 | M53 | Open a single MP3 and let it finish | Playback returns to zero and remains silent |
 | M54 | Pause before the endpoint | Playback stays paused until resumed or manually changed |
+| M55 | Launch the app and click Repeat repeatedly. | The initial mode is OFF; clicks cycle through ALL, ONE and OFF. |
+| M56 | With Repeat OFF, let the final queued song finish. | Playback returns to zero and remains silent. |
+| M57 | With Repeat ALL and multiple songs, finish the final song; also try Next at the end and Previous at the beginning. | Automatic completion and manual navigation wrap around the queue. |
+| M58 | With Repeat ONE, finish a song, then press Next. | Completion replays the same song; Next starts the next song, which then repeats. |
+| M59 | Open a single MP3 and test Repeat ALL and ONE. | The song repeats automatically; Previous and Next remain disabled. |
+| M60 | Pause playback, then change repeat mode. | Playback remains paused and the controls reflect the new mode. |
+| M61 | Search or import files while a captured queue is playing with Repeat ALL. | Playback continues and loops through the original captured queue. |
+| M62 | Change repeat mode, start another queue, then restart the app. | New queues retain the mode and volume during the session; restarting resets repeat to OFF. |
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
 For a check failure, record the check ID, exact action, error text, JDK/JavaFX versions and whether the same file works elsewhere. Do not commit personal audio files as evidence.

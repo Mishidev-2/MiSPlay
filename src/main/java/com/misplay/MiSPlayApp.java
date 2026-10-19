@@ -1,7 +1,7 @@
 package com.misplay;
 
 import com.misplay.model.PlaybackQueue;
-
+import com.misplay.model.RepeatMode;
 import com.misplay.service.LibraryService;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
@@ -54,13 +54,26 @@ public class MiSPlayApp extends Application {
         Button pauseButton = new Button("Pause");
         Button previousButton = new Button("Previous");
         Button nextButton = new Button("Next");
+        Button repeatButton = new Button();
 
         Runnable updateQueueButtons = () -> {
             previousButton.setDisable(!playbackQueue.hasPrevious());
             nextButton.setDisable(!playbackQueue.hasNext());
+            repeatButton.setText("Repeat: " + playbackQueue.getRepeatMode());
         };
 
         updateQueueButtons.run();
+
+        repeatButton.setOnAction(event -> {
+            RepeatMode mode = switch (playbackQueue.getRepeatMode()) {
+                case OFF -> RepeatMode.ALL;
+                case ALL -> RepeatMode.ONE;
+                case ONE -> RepeatMode.OFF;
+            };
+
+            playbackQueue.setRepeatMode(mode);
+            updateQueueButtons.run();
+        });
 
         playButton.setDisable(true);
         pauseButton.setDisable(true);
@@ -169,7 +182,16 @@ public class MiSPlayApp extends Application {
             playFile.accept(nextFile);
         };
 
-        audioService.setOnTrackFinished(playNext);
+        audioService.setOnTrackFinished(() -> {
+            File nextFile = playbackQueue.nextAfterCompletion();
+
+            if (nextFile == null) {
+                updateQueueButtons.run();
+                return;
+            }
+
+            playFile.accept(nextFile);
+        });
 
         Consumer<File> startQueue = file -> {
             playbackQueue.start(filteredTracks, file);
@@ -322,9 +344,9 @@ public class MiSPlayApp extends Application {
                 previousButton,
                 playButton,
                 pauseButton,
-                nextButton
+                nextButton,
+                repeatButton
         );
-
         controls.setAlignment(Pos.CENTER);
 
         VBox root = new VBox(
