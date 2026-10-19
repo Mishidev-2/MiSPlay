@@ -19,6 +19,9 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Session-only song library with batch MP3 import and duplicate-path prevention.
 - Resizable, virtualized song list with filename display and playback through double-click or Enter.
 - Live filename search with case-insensitive matching, whitespace trimming and a no-results message.
+- Manual playback queue navigation with Previous/Next controls and disabled buttons at queue boundaries.
+- Queues captured from visible song-list results, preserved across searches and imports.
+- Single-song queues when opening an MP3 directly.
 
 ### Verification
 

@@ -1,5 +1,7 @@
 package com.misplay;
 
+import com.misplay.model.PlaybackQueue;
+
 import com.misplay.service.LibraryService;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
@@ -38,7 +40,7 @@ public class MiSPlayApp extends Application {
     private AudioService audioService;
     private boolean updatingSeekSlider;
     private final LibraryService libraryService = new LibraryService();
-
+    private final PlaybackQueue playbackQueue = new PlaybackQueue();
 
     @Override
     public void start(Stage stage) {
@@ -50,6 +52,15 @@ public class MiSPlayApp extends Application {
         Button addButton = new Button("Add MP3s");
         Button playButton = new Button("Play");
         Button pauseButton = new Button("Pause");
+        Button previousButton = new Button("Previous");
+        Button nextButton = new Button("Next");
+
+        Runnable updateQueueButtons = () -> {
+            previousButton.setDisable(!playbackQueue.hasPrevious());
+            nextButton.setDisable(!playbackQueue.hasNext());
+        };
+
+        updateQueueButtons.run();
 
         playButton.setDisable(true);
         pauseButton.setDisable(true);
@@ -122,13 +133,34 @@ public class MiSPlayApp extends Application {
                 new FileChooser.ExtensionFilter("MP3 audio", "*.mp3")
         );
 
+        FilteredList<File> filteredTracks =
+                new FilteredList<>(libraryService.getTracks(), file -> true);
+
+        ListView<File> songList = new ListView<>(filteredTracks);
+
         Consumer<File> playFile = file -> {
             trackLabel.setText(file.getName());
             errorLabel.setText("");
             playButton.setDisable(false);
             pauseButton.setDisable(false);
 
+            // Highlight the playing file when it is visible.
+            int visibleIndex = filteredTracks.indexOf(file);
+
+            songList.getSelectionModel().clearSelection();
+
+            if (visibleIndex >= 0) {
+                songList.getSelectionModel().select(visibleIndex);
+                songList.scrollTo(visibleIndex);
+            }
+
             audioService.loadAndPlay(file);
+            updateQueueButtons.run();
+        };
+
+        Consumer<File> startQueue = file -> {
+            playbackQueue.start(filteredTracks, file);
+            playFile.accept(file);
         };
 
         openButton.setOnAction(event -> {
@@ -141,6 +173,8 @@ public class MiSPlayApp extends Application {
             }
 
             libraryService.addFiles(List.of(selectedFile));
+
+            playbackQueue.start(List.of(selectedFile), selectedFile);
             playFile.accept(selectedFile);
         });
 
@@ -156,11 +190,6 @@ public class MiSPlayApp extends Application {
 
             libraryService.addFiles(selectedFiles);
         });
-
-        FilteredList<File> filteredTracks =
-                new FilteredList<>(libraryService.getTracks(), file -> true);
-
-        ListView<File> songList = new ListView<>(filteredTracks);
 
         TextField searchField = new TextField();
         searchField.setPromptText("Search filenames...");
@@ -212,7 +241,7 @@ public class MiSPlayApp extends Application {
                         && event.getClickCount() == 2
                         && !cell.isEmpty()
                         && cell.getItem() != null) {
-                    playFile.accept(cell.getItem());
+                    startQueue.accept(cell.getItem());
                     event.consume();
                 }
             });
@@ -226,7 +255,7 @@ public class MiSPlayApp extends Application {
                         songList.getSelectionModel().getSelectedItem();
 
                 if (selectedFile != null) {
-                    playFile.accept(selectedFile);
+                    startQueue.accept(selectedFile);
                 }
 
                 event.consume();
@@ -235,7 +264,21 @@ public class MiSPlayApp extends Application {
 
         playButton.setOnAction(event -> audioService.play());
         pauseButton.setOnAction(event -> audioService.pause());
+        previousButton.setOnAction(event -> {
+            File file = playbackQueue.previous();
 
+            if (file != null) {
+                playFile.accept(file);
+            }
+        });
+
+        nextButton.setOnAction(event -> {
+            File file = playbackQueue.next();
+
+            if (file != null) {
+                playFile.accept(file);
+            }
+        });
         Slider volumeSlider = new Slider(
                 0,
                 100,
@@ -266,8 +309,15 @@ public class MiSPlayApp extends Application {
         volumeControls.setAlignment(Pos.CENTER);
 
         HBox controls = new HBox(
-                10, openButton, addButton, playButton, pauseButton
+                10,
+                openButton,
+                addButton,
+                previousButton,
+                playButton,
+                pauseButton,
+                nextButton
         );
+
         controls.setAlignment(Pos.CENTER);
 
         VBox root = new VBox(

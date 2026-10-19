@@ -13,7 +13,7 @@ The current checkpoint is local MP3 playback. Library scanning, metadata service
 | `MiSPlayApp` | JavaFX controls, the file chooser, displayed messages and the `AudioService` instance | Media decoding and audio resource management |
 | `AudioService` | The current `MediaPlayer`, playback requests, error handling and disposal | Windows, buttons, labels or library rendering |
 | `LibraryService` | Owns the session-only song collection, exposes a read-only observable view and prevents duplicate file paths during import. |
-
+| `PlaybackQueue` | Stores playback order and the current position; prevents navigation past the first or last entry. |
 ### Opening a track
 
 1. The user chooses an MP3 in the file chooser.
@@ -90,11 +90,13 @@ New files are collected and added in one batch using `addAll()`.
 
 `MiSPlayApp` displays the collection in a `ListView<File>` with a fixed cell height of 32. Reusable cells display filenames and clear their contents when empty. Cell updates perform no metadata parsing, artwork loading or audio loading.
 
-Open MP3 adds the selected file and starts playback. Add MP3s adds selected files without changing playback. Double-clicking a populated row or pressing Enter on a selected row invokes the shared `playFile` action.
+Open MP3 adds the selected file and starts a single-song queue. Add MP3s imports files without changing playback or the active queue. Double-clicking a populated row or pressing Enter on a selected row invokes `startQueue`, which captures the visible results and delegates playback to `playFile`.
 
 The double-click handler reads the cell's current item when clicked, ensuring recycled cells play the file they currently display.
 
 The collection exists only for the current application session and starts empty on the next launch.
+
+
 
 ### Filename search
 
@@ -111,6 +113,24 @@ New imports automatically pass through the active filter. Duplicate prevention s
 The placeholder shows an import instruction when the library is empty and a no-results message when a populated library has no matching files.
 
 Filtering runs in JavaFX text-change handlers and examines filenames already in memory.
+
+### Playback queue
+
+`PlaybackQueue` is a plain Java model containing a list of files and a current index. Before a queue starts, the index is `-1`.
+
+Starting playback from a song-list row or Enter captures the currently visible files using `List.copyOf()`. The chosen file determines the starting position within that snapshot.
+
+Search changes and library imports preserve the active queue. Starting a row again captures a fresh snapshot. Open MP3 creates a queue containing only the selected file.
+
+The `startQueue` action establishes the queue and delegates playback to `playFile`. Previous/Next move within the existing queue and call `playFile` without rebuilding it.
+
+Navigation starts the adjacent song, including when the previous song was paused. Volume carries over through `AudioService`.
+
+Previous is disabled at the first entry, Next at the last entry, and both before playback or for a single-song queue. Navigation does not wrap.
+
+When visible, the playing file is selected and scrolled into view.
+
+Natural track completion currently resets playback to zero and leaves it silent. The queue position stays unchanged, allowing manual navigation or replay. Automatic advancement is the next milestone.
 
 ### Threading
 
@@ -165,6 +185,14 @@ Use MP3 files outside the Git repository. A small set of known working files is 
 | M39 | Double-click a filtered result or select it and press Enter | The displayed file starts playing |
 | M40 | Import files while searching | Matching files appear immediately; other files appear after clearing the search |
 | M41 | Re-import a file hidden by the filter, then clear the search | Only one entry exists for that path |
+| M42 | Launch before starting playback | Previous and Next are disabled |
+| M43 | Start the middle entry of a list containing at least three songs | Both navigation buttons enable |
+| M44 | Navigate to the first and last queue entries | Correct adjacent files play; buttons disable at their respective boundaries |
+| M45 | Start from filtered results, then change the search | Navigation follows the captured queue |
+| M46 | Import more files, then start a row again | Imports preserve the old queue; starting a row captures the updated visible list |
+| M47 | Pause, change volume and press Next | The next song starts using the selected volume |
+| M48 | Use Open MP3 | A single-song queue starts with both navigation buttons disabled |
+| M49 | Let a song finish | Playback resets to zero and stays silent; Next is enabled only when another queued entry exists |
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
 For a check failure, record the check ID, exact action, error text, JDK/JavaFX versions and whether the same file works elsewhere. Do not commit personal audio files as evidence.

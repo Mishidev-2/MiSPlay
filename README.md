@@ -22,6 +22,9 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Prevent duplicate imports using normalized absolute file paths.
 - Live, case-insensitive filename search that ignores surrounding query whitespace.
 - Search results update as files are imported, while current playback continues.
+- Manual Previous/Next navigation through a queue captured from the visible song list.
+- Queue order stays stable during searches and imports.
+- Open MP3 starts a single-song queue.
 
 ## Technology
 
@@ -80,7 +83,7 @@ Run the [manual playback checks](docs/DEVELOPMENT.md#manual-checks) before commi
 
 ## Next milestone
 
-- Add a basic playback queue with Next and Previous controls.
+- Automatically advance to the next queued song when playback finishes.
 
 ## Planned features
 
