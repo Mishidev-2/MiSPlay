@@ -16,6 +16,10 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Display elapsed playback time and track duration, with a placeholder while duration is unavailable.
 - Seek using the playback slider with mouse dragging, track clicks and keyboard controls.
 - Seek while paused or after a track finishes without starting playback.
+- Session-only song list using a virtualized JavaFX ListView.
+- Add multiple MP3s without changing playback.
+- Play a song by double-clicking its row or pressing Enter.
+- Prevent duplicate imports using normalized absolute file paths.
 
 ## Technology
 
@@ -74,7 +78,7 @@ Run the [manual playback checks](docs/DEVELOPMENT.md#manual-checks) before commi
 
 ## Next milestone
 
-- Add an in-memory song list using a virtualized JavaFX ListView.
+- Add filename search without interrupting playback.
 
 ## Planned features
 

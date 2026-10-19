@@ -12,6 +12,7 @@ The current checkpoint is local MP3 playback. Library scanning, metadata service
 | --- | --- | --- |
 | `MiSPlayApp` | JavaFX controls, the file chooser, displayed messages and the `AudioService` instance | Media decoding and audio resource management |
 | `AudioService` | The current `MediaPlayer`, playback requests, error handling and disposal | Windows, buttons, labels or library rendering |
+| `LibraryService` | Owns the session-only song collection, exposes a read-only observable view and prevents duplicate file paths during import. |
 
 ### Opening a track
 
@@ -79,6 +80,22 @@ After the stop completes, `onStopped` requests `pause()` so the track remains av
 
 Playback stays silent until Play is pressed. Play resumes from zero or from a position selected after completion.
 
+### Song list
+
+`LibraryService` stores songs in an `ObservableList<File>`. Its public getter returns an unmodifiable observable view, allowing the UI to observe changes while additions go through the service.
+
+Imported paths are converted to normalized absolute paths. A `HashSet<Path>` prevents repeated imports of the same path. Files with identical filenames in different directories remain separate entries.
+
+New files are collected and added in one batch using `addAll()`.
+
+`MiSPlayApp` displays the collection in a `ListView<File>` with a fixed cell height of 32. Reusable cells display filenames and clear their contents when empty. Cell updates perform no metadata parsing, artwork loading or audio loading.
+
+Open MP3 adds the selected file and starts playback. Add MP3s adds selected files without changing playback. Double-clicking a populated row or pressing Enter on a selected row invokes the shared `playFile` action.
+
+The double-click handler reads the cell's current item when clicked, ensuring recycled cells play the file they currently display.
+
+The collection exists only for the current application session and starts empty on the next launch.
+
 ### Threading
 
 Current service calls originate from JavaFX event handlers. Keep UI updates on the JavaFX Application Thread. JavaFX handles asynchronous media preparation; a custom audio playback thread is not needed for this implementation.
@@ -118,7 +135,13 @@ Use MP3 files outside the Git repository. A small set of known working files is 
 | M25 | Pause, seek, then press Play | Position display updates while silent; Play resumes from the selected position |
 | M26 | Seek after a track finishes, then press Play | Position display updates while silent; Play starts from the selected position |
 | M27 | Open another MP3 | Slider position and range update for the replacement track |
-
+| M28 | Add several MP3s | Filenames appear without changing playback |
+| M29 | Double-click a populated row, then select another and press Enter | Each action starts the chosen file |
+| M30 | Import an existing file through Add MP3s and Open MP3 | Only one row exists for that path; Open MP3 still starts playback |
+| M31 | Double-click an empty row | Playback remains unchanged |
+| M32 | Cancel either file dialog during playback | Collection and playback remain unchanged |
+| M33 | Resize and scroll while playing | List uses available space, rows display correctly and audio continues |
+| M34 | Close and reopen MiSPlay | Song list starts empty |
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
 For a check failure, record the check ID, exact action, error text, JDK/JavaFX versions and whether the same file works elsewhere. Do not commit personal audio files as evidence.
@@ -148,6 +171,7 @@ type: short description of the resulting behavior
 | `refactor` | Improve structure while preserving behavior |
 | `chore` | Repository or build maintenance |
 | `test` | Add meaningful verification |
+
 
 The first commit suggestion is:
 

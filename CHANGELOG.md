@@ -16,6 +16,8 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Elapsed playback time and track duration display, including an unavailable-duration placeholder.
 - Playback seek slider with mouse and keyboard controls.
 - Seeking while paused and after track completion, with immediate position display updates.
+- Session-only song library with batch MP3 import and duplicate-path prevention.
+- Resizable, virtualized song list with filename display and playback through double-click or Enter.
 
 ### Verification
 

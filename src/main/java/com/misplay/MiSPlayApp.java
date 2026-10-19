@@ -1,5 +1,15 @@
 package com.misplay;
 
+import com.misplay.service.LibraryService;
+import javafx.scene.control.ListCell;
+import javafx.scene.control.ListView;
+import javafx.scene.input.KeyCode;
+import javafx.scene.input.MouseButton;
+import javafx.scene.layout.Priority;
+
+import java.util.List;
+import java.util.function.Consumer;
+
 import com.misplay.service.AudioService;
 import javafx.application.Application;
 import javafx.geometry.Insets;
@@ -22,6 +32,8 @@ public class MiSPlayApp extends Application {
 
     private AudioService audioService;
     private boolean updatingSeekSlider;
+    private final LibraryService libraryService = new LibraryService();
+
 
     @Override
     public void start(Stage stage) {
@@ -30,6 +42,7 @@ public class MiSPlayApp extends Application {
         errorLabel.setWrapText(true);
 
         Button openButton = new Button("Open MP3");
+        Button addButton = new Button("Add MP3s");
         Button playButton = new Button("Play");
         Button pauseButton = new Button("Pause");
 
@@ -104,20 +117,86 @@ public class MiSPlayApp extends Application {
                 new FileChooser.ExtensionFilter("MP3 audio", "*.mp3")
         );
 
+        Consumer<File> playFile = file -> {
+            trackLabel.setText(file.getName());
+            errorLabel.setText("");
+            playButton.setDisable(false);
+            pauseButton.setDisable(false);
+
+            audioService.loadAndPlay(file);
+        };
+
         openButton.setOnAction(event -> {
+            chooser.setTitle("Open an MP3");
+
             File selectedFile = chooser.showOpenDialog(stage);
 
             if (selectedFile == null) {
                 return;
             }
 
-            trackLabel.setText(selectedFile.getName());
-            errorLabel.setText("");
+            libraryService.addFiles(List.of(selectedFile));
+            playFile.accept(selectedFile);
+        });
 
-            playButton.setDisable(false);
-            pauseButton.setDisable(false);
+        addButton.setOnAction(event -> {
+            chooser.setTitle("Add MP3s");
 
-            audioService.loadAndPlay(selectedFile);
+            List<File> selectedFiles =
+                    chooser.showOpenMultipleDialog(stage);
+
+            if (selectedFiles == null) {
+                return;
+            }
+
+            libraryService.addFiles(selectedFiles);
+        });
+
+        ListView<File> songList =
+                new ListView<>(libraryService.getTracks());
+
+        songList.setPlaceholder(
+                new Label("Use Add MP3s to build your song list.")
+        );
+
+        songList.setFixedCellSize(32);
+        songList.setMinHeight(120);
+
+        songList.setCellFactory(listView -> {
+            ListCell<File> cell = new ListCell<>() {
+                @Override
+                protected void updateItem(File file, boolean empty) {
+                    super.updateItem(file, empty);
+
+                    setText(empty || file == null ? null : file.getName());
+                    setGraphic(null);
+                }
+            };
+
+            cell.setOnMouseClicked(event -> {
+                if (event.getButton() == MouseButton.PRIMARY
+                        && event.getClickCount() == 2
+                        && !cell.isEmpty()
+                        && cell.getItem() != null) {
+                    playFile.accept(cell.getItem());
+                    event.consume();
+                }
+            });
+
+            return cell;
+        });
+
+        songList.setOnKeyPressed(event -> {
+            if (event.getCode() == KeyCode.ENTER) {
+                File selectedFile =
+                        songList.getSelectionModel().getSelectedItem();
+
+                if (selectedFile != null) {
+                    playFile.accept(selectedFile);
+                }
+
+                event.consume();
+            }
         });
 
         playButton.setOnAction(event -> audioService.play());
@@ -152,11 +231,14 @@ public class MiSPlayApp extends Application {
         );
         volumeControls.setAlignment(Pos.CENTER);
 
-        HBox controls = new HBox(10, openButton, playButton, pauseButton);
+        HBox controls = new HBox(
+                10, openButton, addButton, playButton, pauseButton
+        );
         controls.setAlignment(Pos.CENTER);
 
         VBox root = new VBox(
-                15,
+                12,
+                songList,
                 trackLabel,
                 timeLabel,
                 seekSlider,
@@ -164,11 +246,13 @@ public class MiSPlayApp extends Application {
                 volumeControls,
                 errorLabel
         );
+
+        VBox.setVgrow(songList, Priority.ALWAYS);
         root.setAlignment(Pos.CENTER);
         root.setPadding(new Insets(20));
 
         stage.setTitle("MiSPlay");
-        stage.setScene(new Scene(root, 640, 360));
+        stage.setScene(new Scene(root, 760, 560));
         stage.show();
     }
 
