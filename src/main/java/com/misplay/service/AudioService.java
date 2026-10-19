@@ -7,11 +7,20 @@ import javafx.scene.media.MediaPlayer;
 import java.io.File;
 import java.util.function.Consumer;
 
+import javafx.beans.property.ReadOnlyObjectProperty;
+import javafx.beans.property.ReadOnlyObjectWrapper;
+import javafx.util.Duration;
+
 public class AudioService {
 
     private MediaPlayer player;
     private final Consumer<String> errorHandler;
     private double volume = 0.5;
+    private final ReadOnlyObjectWrapper<Duration> currentTime =
+            new ReadOnlyObjectWrapper<>(Duration.ZERO);
+
+    private final ReadOnlyObjectWrapper<Duration> duration =
+            new ReadOnlyObjectWrapper<>(Duration.UNKNOWN);
 
     public AudioService(Consumer<String> errorHandler) {
         this.errorHandler = errorHandler;
@@ -24,6 +33,9 @@ public class AudioService {
             Media media = new Media(file.toURI().toString());
             MediaPlayer nextPlayer = new MediaPlayer(media);
             player = nextPlayer;
+
+            currentTime.bind(nextPlayer.currentTimeProperty());
+            duration.bind(media.durationProperty());
 
             media.setOnError(() ->
                     handleError(nextPlayer, media.getError()));
@@ -54,9 +66,16 @@ public class AudioService {
     }
 
     public void dispose() {
-        if (player != null) {
-            MediaPlayer previousPlayer = player;
-            player = null;
+        MediaPlayer previousPlayer = player;
+        player = null;
+
+        currentTime.unbind();
+        duration.unbind();
+
+        currentTime.set(Duration.ZERO);
+        duration.set(Duration.UNKNOWN);
+
+        if (previousPlayer != null) {
             previousPlayer.dispose();
         }
     }
@@ -71,6 +90,14 @@ public class AudioService {
         if (player != null) {
             player.setVolume(volume);
         }
+    }
+
+    public ReadOnlyObjectProperty<Duration> currentTimeProperty() {
+        return currentTime.getReadOnlyProperty();
+    }
+
+    public ReadOnlyObjectProperty<Duration> durationProperty() {
+        return duration.getReadOnlyProperty();
     }
 
     private void handleError(MediaPlayer source, MediaException error) {

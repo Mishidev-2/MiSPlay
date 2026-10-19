@@ -47,6 +47,17 @@ Every replacement player receives the stored volume. Volume can also be adjusted
 
 The setting lasts for the current application session. Each application launch starts at 50%.
 
+### Playback time
+
+`AudioService` exposes read-only `currentTimeProperty()` and `durationProperty()` values. These follow the active player's playback position and the source media's duration.
+
+`MiSPlayApp` binds its time label to those properties. Updates come from JavaFX property notifications without a polling timer.
+
+The `formatTime()` helper displays minutes and seconds, adding hours for longer recordings. Unknown, indefinite or invalid values display as `--:--`.
+
+When replacing or disposing of a player, the service disconnects both bindings and resets elapsed time to zero and duration to unknown before releasing the player.
+
+
 ### Threading
 
 Current service calls originate from JavaFX event handlers. Keep UI updates on the JavaFX Application Thread. JavaFX handles asynchronous media preparation; a custom audio playback thread is not needed for this implementation.
@@ -75,7 +86,11 @@ Use MP3 files outside the Git repository. A small set of known working files is 
 | M14 | Set volume to 20%, then open another MP3 | The replacement track uses the stored volume and the slider remains at 20% |
 | M15 | Pause, change volume, then resume | Playback resumes using the new volume |
 | M16 | Close and reopen MiSPlay | Volume starts at the default 50% |
-
+| M17 | Launch before opening a file | Time displays as `0:00 / --:--` |
+| M18 | Open an MP3 and let it play | Duration appears when available and elapsed time advances |
+| M19 | Pause, then resume | Elapsed time holds while paused and continues after resuming |
+| M20 | Open another MP3 during playback | Elapsed time resets and the new file's duration appears |
+| M21 | Let a track finish | Elapsed time returns to zero and the track duration remains displayed |
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
 For a check failure, record the check ID, exact action, error text, JDK/JavaFX versions and whether the same file works elsewhere. Do not commit personal audio files as evidence.
@@ -116,8 +131,7 @@ For later checkpoints, update `CHANGELOG.md` when functionality changes. Update 
 
 ## Upcoming implementation notes
 
-- Read progress and duration from the playback API. Do not infer time from bytes consumed.
-- Handle unknown/invalid duration while media loads, and prevent automatic slider updates from fighting user seeking.
+- Prevent automatic seek-slider updates from fighting user input.
 - Attach callbacks to every replacement player. Store service-level callback intentions if consumers register before any player exists.
 - Give tracks stable identity before implementing persistent library/playlist relationships.
 - Keep scanning and artwork decoding out of virtualized cell updates.

@@ -13,6 +13,9 @@ import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import javafx.scene.control.Slider;
 
+import javafx.beans.binding.Bindings;
+import javafx.util.Duration;
+
 import java.io.File;
 
 public class MiSPlayApp extends Application {
@@ -37,6 +40,18 @@ public class MiSPlayApp extends Application {
             playButton.setDisable(true);
             pauseButton.setDisable(true);
         });
+
+        Label timeLabel = new Label();
+
+        timeLabel.textProperty().bind(
+                Bindings.createStringBinding(
+                        () -> formatTime(audioService.currentTimeProperty().get())
+                                + " / "
+                                + formatTime(audioService.durationProperty().get()),
+                        audioService.currentTimeProperty(),
+                        audioService.durationProperty()
+                )
+        );
 
         FileChooser chooser = new FileChooser();
         chooser.setTitle("Open an MP3");
@@ -98,6 +113,7 @@ public class MiSPlayApp extends Application {
         VBox root = new VBox(
                 15,
                 trackLabel,
+                timeLabel,
                 controls,
                 volumeControls,
                 errorLabel
@@ -108,6 +124,26 @@ public class MiSPlayApp extends Application {
         stage.setTitle("MiSPlay");
         stage.setScene(new Scene(root, 640, 360));
         stage.show();
+    }
+
+    private static String formatTime(Duration time) {
+        if (time == null
+                || time.isUnknown()
+                || time.isIndefinite()
+                || time.lessThan(Duration.ZERO)) {
+            return "--:--";
+        }
+
+        long totalSeconds = (long) time.toSeconds();
+        long hours = totalSeconds / 3600;
+        long minutes = (totalSeconds % 3600) / 60;
+        long seconds = totalSeconds % 60;
+
+        if (hours > 0) {
+            return String.format("%d:%02d:%02d", hours, minutes, seconds);
+        }
+
+        return String.format("%d:%02d", minutes, seconds);
     }
 
     @Override
