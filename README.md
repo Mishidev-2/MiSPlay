@@ -29,6 +29,8 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Finish silently at zero after the final queued song.
 - Repeat Off, Repeat All and Repeat One, with manual track navigation.
 - Shuffle playback with consistent Previous/Next navigation and restoration of the original queue order when disabled.
+- Now-playing title, artist and album read from MP3 tags using a background worker.
+- Filename and Unknown artist/album fallbacks for missing metadata.
 
 ## Technology
 
@@ -87,7 +89,7 @@ Run the [manual playback checks](docs/DEVELOPMENT.md#manual-checks) before commi
 
 ## Next milestone
 
-- Read and display song titles, artists and albums from MP3 metadata.
+- Display and search cached title, artist and album metadata in the song library.
 
 ## Planned features
 
@@ -102,6 +104,12 @@ Run the [manual playback checks](docs/DEVELOPMENT.md#manual-checks) before commi
 - A bundled Windows runtime and executable/installer through `jpackage`.
 
 The future Python LRC generator is a separate project. AI models are not part of normal music playback.
+
+## Known limitations
+
+- The song list and search currently use filenames.
+- The now-playing artist display uses the first stored artist value.
+- One test song, Yaezakura by HoyoMix, displays a shortened artist/details line. The cause has not yet been diagnosed.
 
 ## Performance
 

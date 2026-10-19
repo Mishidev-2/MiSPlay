@@ -4,6 +4,12 @@ import com.misplay.model.PlaybackQueue;
 import com.misplay.service.AudioService;
 import com.misplay.model.RepeatMode;
 import com.misplay.service.LibraryService;
+import com.misplay.model.TrackMetadata;
+import com.misplay.service.MetadataService;
+import javafx.concurrent.Task;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import javafx.scene.Scene;
 import javafx.scene.layout.HBox;
@@ -38,6 +44,8 @@ import javafx.stage.Stage;
 import javafx.beans.binding.Bindings;
 import javafx.util.Duration;
 
+
+
 import java.io.File;
 
 public class MiSPlayApp extends Application {
@@ -46,10 +54,22 @@ public class MiSPlayApp extends Application {
     private boolean updatingSeekSlider;
     private final LibraryService libraryService = new LibraryService();
     private final PlaybackQueue playbackQueue = new PlaybackQueue();
+    private final MetadataService metadataService = new MetadataService();
+    private final ExecutorService metadataExecutor =
+            Executors.newSingleThreadExecutor(runnable -> {
+                Thread worker = new Thread(runnable, "misplay-metadata");
+                worker.setDaemon(true);
+                return worker;
+            });
+    private Task<TrackMetadata> metadataTask;
+
 
     @Override
     public void start(Stage stage) {
         Label trackLabel = new Label("Open an MP3 to begin.");
+        trackLabel.setWrapText(true);
+        Label metadataLabel = new Label();
+        metadataLabel.setWrapText(true);
         Label errorLabel = new Label();
         errorLabel.setWrapText(true);
 
@@ -174,7 +194,7 @@ public class MiSPlayApp extends Application {
         ListView<File> songList = new ListView<>(filteredTracks);
 
         Consumer<File> playFile = file -> {
-            trackLabel.setText(file.getName());
+            loadMetadata(file, trackLabel, metadataLabel);
             errorLabel.setText("");
             playButton.setDisable(false);
             pauseButton.setDisable(false);
@@ -384,6 +404,7 @@ public class MiSPlayApp extends Application {
                 searchField,
                 songList,
                 trackLabel,
+                metadataLabel,
                 timeLabel,
                 seekSlider,
                 controls,
@@ -399,6 +420,58 @@ public class MiSPlayApp extends Application {
         stage.setTitle("MiSPlay");
         stage.setScene(new Scene(root, 760, 560));
         stage.show();
+    }
+
+    private void loadMetadata(
+            File file,
+            Label titleLabel,
+            Label detailsLabel
+    ) {
+        if (metadataTask != null) {
+            metadataTask.cancel();
+        }
+
+        titleLabel.setText(file.getName());
+        detailsLabel.setText("Reading tags...");
+
+        Task<TrackMetadata> nextTask = new Task<>() {
+            @Override
+            protected TrackMetadata call() throws Exception {
+                return metadataService.read(file);
+            }
+        };
+
+        metadataTask = nextTask;
+
+        nextTask.setOnSucceeded(event -> {
+            if (metadataTask != nextTask) {
+                return;
+            }
+
+            TrackMetadata metadata = nextTask.getValue();
+
+            titleLabel.setText(metadata.title());
+            detailsLabel.setText(
+                    metadata.artist() + " — " + metadata.album()
+            );
+        });
+
+        nextTask.setOnFailed(event -> {
+            if (metadataTask != nextTask) {
+                return;
+            }
+
+            detailsLabel.setText(
+                    "Tags unavailable — showing filename."
+            );
+
+            System.err.println(
+                    "Metadata read failed for " + file.getName()
+                            + ": " + nextTask.getException()
+            );
+        });
+
+        metadataExecutor.execute(nextTask);
     }
 
     private void updateSeekSlider(Slider slider) {
@@ -459,6 +532,15 @@ public class MiSPlayApp extends Application {
 
     @Override
     public void stop() {
+        Task<TrackMetadata> previousTask = metadataTask;
+        metadataTask = null;
+
+        if (previousTask != null) {
+            previousTask.cancel();
+        }
+
+        metadataExecutor.shutdownNow();
+
         if (audioService != null) {
             audioService.dispose();
         }

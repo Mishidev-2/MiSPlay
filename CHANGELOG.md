@@ -26,6 +26,9 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Repeat Off, Repeat All and Repeat One, including queue wrapping and manual skipping while repeating one song.
 - Session-only shuffle playback, preserving the current song when toggled.
 - Stable navigation through shuffled queues, including Repeat All support and restoration of the captured order when shuffle is disabled.
+- Jaudiotagger integration for reading now-playing title, artist and album metadata.
+- Background metadata loading with cancellation requests and protection against stale results.
+- Fallback text for missing tags and metadata read failures.
 
 ### Verification
 

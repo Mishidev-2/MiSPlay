@@ -15,6 +15,8 @@ The current checkpoint is local MP3 playback. Library scanning, metadata service
 | `LibraryService` | Owns the session-only song collection, exposes a read-only observable view and prevents duplicate file paths during import. |
 | `PlaybackQueue` | Stores original and active queue orders, tracks the current position, and applies navigation, repeat and shuffle rules. |
 | `RepeatMode` | Defines the available repeat choices: OFF, ALL and ONE. |
+| `MetadataService` | Reads title, artist and album tags and supplies fallbacks for missing fields. |
+| `TrackMetadata` | Immutable record containing the title, artist and album strings used for display. |
 ### Opening a track
 
 1. The user chooses an MP3 in the file chooser.
@@ -165,11 +167,35 @@ When visible, the playing file is selected and scrolled into view.
 
 Natural track completion advances to the next entry in the captured queue. After the final entry, playback returns to zero and remains silent. The queue position stays at that final entry, allowing replay or Previous navigation.
 
+### Now-playing metadata
+
+`MetadataService` uses Jaudiotagger 3.0.1 to read an MP3's tags. It retrieves the first stored value for TITLE, ARTIST and ALBUM.
+
+Missing or blank titles fall back to the filename. Missing artists and albums use Unknown artist and Unknown album.
+
+The service returns a `TrackMetadata` record containing strings. Parser objects and embedded artwork are not retained by the application.
+
+The shared `playFile` action calls `loadMetadata`, covering Open MP3, row activation, manual navigation and automatic queue advancement.
+
+The filename appears immediately while metadata loads. Successful reads replace it with the embedded title and display the artist and album below.
+
+Read failures retain the filename, show a metadata-unavailable message and log the exception independently of audio errors.
+
+The song list and filename search are unchanged at this checkpoint. Metadata is not yet cached.
+
+Known issue: Yaezakura displays a shortened artist/details line even though Windows Properties lists artist and album information. The cause remains undiagnosed and investigation is deferred.
+
 ### Threading
 
-Current service calls originate from JavaFX event handlers. Keep UI updates on the JavaFX Application Thread. JavaFX handles asynchronous media preparation; a custom audio playback thread is not needed for this implementation.
+JavaFX controls, observable library collections and playback queue state are updated on the JavaFX Application Thread.
 
-When scanning or metadata reading is added, perform filesystem traversal and expensive tag/image work away from the UI thread. Apply the resulting UI collection changes on the JavaFX Application Thread. Choose the simplest background-task mechanism that meets that requirement.
+Metadata reads run through `Task<TrackMetadata>` on a single background executor. The task's `call` method reads the file and returns data without accessing UI controls.
+
+Success and failure handlers run on the JavaFX Application Thread and update the labels there.
+
+Starting another read requests cancellation of the previous task. Each result handler also checks that its task is still the current `metadataTask`, preventing an older result from overwriting a newer song's details.
+
+Application shutdown clears the current task reference, requests cancellation, shuts down the metadata executor and disposes the audio player.
 
 ## Manual checks
 
@@ -251,7 +277,13 @@ Unless a check specifies otherwise, start it with Repeat OFF and Shuffle OFF.
 | M70 | Search and import files during shuffled playback, then activate another row. | The active queue stays unchanged until row activation captures a fresh queue from the visible results. |
 | M71 | Use Open MP3 with shuffle enabled; test Repeat ALL and ONE. | The queue contains one song, navigation buttons remain disabled, and automatic repeat works. |
 | M72 | Start another queue with shuffle enabled, then restart the app. | Shuffle remains enabled between queues during the session and resets to OFF after restart. |
-
+| M73 | Play a tagged MP3. | The now-playing area displays its title, first stored artist value and album. |
+| M74 | Change songs through Open MP3, row activation, navigation and automatic advancement. | Metadata follows the current song. |
+| M75 | Skip several songs quickly. | An older result does not overwrite the final song's details. |
+| M76 | Play an untagged or partially tagged MP3. | Missing fields use the documented fallbacks. |
+| M77 | Play songs with Unicode tags. | Japanese, Korean and Chinese text displays correctly. |
+| M78 | Use pause, seeking, volume, repeat and shuffle after metadata loads. | Playback controls continue working. |
+| M79 | Close the application. | Audio stops and the application exits. |
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
 For a check failure, record the check ID, exact action, error text, JDK/JavaFX versions and whether the same file works elsewhere. Do not commit personal audio files as evidence.
