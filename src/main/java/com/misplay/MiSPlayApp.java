@@ -158,6 +158,19 @@ public class MiSPlayApp extends Application {
             updateQueueButtons.run();
         };
 
+        Runnable playNext = () -> {
+            File nextFile = playbackQueue.next();
+
+            if (nextFile == null) {
+                updateQueueButtons.run();
+                return;
+            }
+
+            playFile.accept(nextFile);
+        };
+
+        audioService.setOnTrackFinished(playNext);
+
         Consumer<File> startQueue = file -> {
             playbackQueue.start(filteredTracks, file);
             playFile.accept(file);
@@ -272,13 +285,7 @@ public class MiSPlayApp extends Application {
             }
         });
 
-        nextButton.setOnAction(event -> {
-            File file = playbackQueue.next();
-
-            if (file != null) {
-                playFile.accept(file);
-            }
-        });
+        nextButton.setOnAction(event -> playNext.run());
         Slider volumeSlider = new Slider(
                 0,
                 100,

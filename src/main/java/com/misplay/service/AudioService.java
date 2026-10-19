@@ -25,6 +25,12 @@ public class AudioService {
     public AudioService(Consumer<String> errorHandler) {
         this.errorHandler = errorHandler;
     }
+    public void setOnTrackFinished(Runnable handler) {
+        onTrackFinished = handler == null ? () -> {} : handler;
+    }
+
+    private Runnable onTrackFinished = () -> {};
+
 
     public void loadAndPlay(File file) {
         dispose();
@@ -50,8 +56,17 @@ public class AudioService {
                     handleError(nextPlayer, nextPlayer.getError()));
 
             nextPlayer.setOnEndOfMedia(() -> {
-                if (player == nextPlayer) {
-                    nextPlayer.stop();
+                if (player != nextPlayer) {
+                    return;
+                }
+
+                boolean wasPlaying =
+                        nextPlayer.getStatus() == MediaPlayer.Status.PLAYING;
+
+                nextPlayer.stop();
+
+                if (wasPlaying) {
+                    onTrackFinished.run();
                 }
             });
 

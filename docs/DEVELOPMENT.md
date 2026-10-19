@@ -74,11 +74,19 @@ Dragging seeks when the handle is released. Track clicks and keyboard adjustment
 
 ### Track completion
 
-When a track finishes, `onEndOfMedia` requests `stop()`, which resets its position to zero.
+Every new `MediaPlayer` receives completion and stopped-state handlers.
 
-After the stop completes, `onStopped` requests `pause()` so the track remains available for seeking. Both handlers check that their player is still active.
+The completion handler ignores replaced players, records whether the active player was playing, requests a stop and invokes the service's `onTrackFinished` callback when appropriate.
 
-Playback stays silent until Play is pressed. Play resumes from zero or from a position selected after completion.
+`MiSPlayApp` registers the shared `playNext` action as that callback. Both the Next button and automatic advancement move through the existing queue and delegate playback to `playFile`.
+
+The callback is stored on `AudioService`, so it remains registered when individual players are replaced.
+
+When another queued file exists, playback starts that file and updates the playback display, visible selection and navigation buttons. Volume carries over.
+
+After the final entry, playback returns to zero and remains silent. The stopped-state handler pauses the still-active player so seeking and replay remain available.
+
+Player identity checks prevent delayed callbacks from a replaced player from affecting its replacement.
 
 ### Song list
 
@@ -130,7 +138,7 @@ Previous is disabled at the first entry, Next at the last entry, and both before
 
 When visible, the playing file is selected and scrolled into view.
 
-Natural track completion currently resets playback to zero and leaves it silent. The queue position stays unchanged, allowing manual navigation or replay. Automatic advancement is the next milestone.
+Natural track completion advances to the next entry in the captured queue. After the final entry, playback returns to zero and remains silent. The queue position stays at that final entry, allowing replay or Previous navigation.
 
 ### Threading
 
@@ -164,7 +172,7 @@ Use MP3 files outside the Git repository. A small set of known working files is 
 | M18 | Open an MP3 and let it play | Duration appears when available and elapsed time advances |
 | M19 | Pause, then resume | Elapsed time holds while paused and continues after resuming |
 | M20 | Open another MP3 during playback | Elapsed time resets and the new file's duration appears |
-| M21 | Let a track finish | Position returns to zero, duration remains displayed and audio stays silent |
+| M21 | Let the final track in a queue finish | Position returns to zero, duration remains displayed and audio stays silent |
 | M22 | Launch, then open an MP3 | Seek slider starts disabled, then enables and follows playback |
 | M23 | Drag the seek handle and hold it before releasing | Handle stays under user control; releasing seeks to the selected position |
 | M24 | Click the slider track and use Left/Right keys | Playback seeks; arrow keys adjust by approximately five seconds |
@@ -192,7 +200,12 @@ Use MP3 files outside the Git repository. A small set of known working files is 
 | M46 | Import more files, then start a row again | Imports preserve the old queue; starting a row captures the updated visible list |
 | M47 | Pause, change volume and press Next | The next song starts using the selected volume |
 | M48 | Use Open MP3 | A single-song queue starts with both navigation buttons disabled |
-| M49 | Let a song finish | Playback resets to zero and stays silent; Next is enabled only when another queued entry exists |
+| M49 | Let a song finish while another queued entry remains | The next queued song starts automatically and the playback display updates |
+| M50 | Let successive queued songs finish | Each advances correctly, confirming the callback survives player replacement |
+| M51 | Change the search or import files during playback | Automatic advancement follows the captured queue |
+| M52 | Adjust volume before an automatic transition | The next song uses the selected volume |
+| M53 | Open a single MP3 and let it finish | Playback returns to zero and remains silent |
+| M54 | Pause before the endpoint | Playback stays paused until resumed or manually changed |
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
 For a check failure, record the check ID, exact action, error text, JDK/JavaFX versions and whether the same file works elsewhere. Do not commit personal audio files as evidence.

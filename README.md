@@ -25,6 +25,8 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Manual Previous/Next navigation through a queue captured from the visible song list.
 - Queue order stays stable during searches and imports.
 - Open MP3 starts a single-song queue.
+- Automatically advance through the captured playback queue.
+- Finish silently at zero after the final queued song.
 
 ## Technology
 
@@ -83,7 +85,7 @@ Run the [manual playback checks](docs/DEVELOPMENT.md#manual-checks) before commi
 
 ## Next milestone
 
-- Automatically advance to the next queued song when playback finishes.
+- Add repeat modes for the current track and the full queue.
 
 ## Planned features
 
