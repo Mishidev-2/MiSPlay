@@ -14,6 +14,8 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Git ignore rules and text line-ending configuration.
 - Adjustable application volume, retained across track changes during the current session.
 - Elapsed playback time and track duration display, including an unavailable-duration placeholder.
+- Playback seek slider with mouse and keyboard controls.
+- Seeking while paused and after track completion, with immediate position display updates.
 
 ### Verification
 

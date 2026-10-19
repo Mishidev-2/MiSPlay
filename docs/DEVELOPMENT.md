@@ -49,14 +49,35 @@ The setting lasts for the current application session. Each application launch s
 
 ### Playback time
 
-`AudioService` exposes read-only `currentTimeProperty()` and `durationProperty()` values. These follow the active player's playback position and the source media's duration.
+`AudioService` exposes read-only `currentTimeProperty()` and `durationProperty()` values.
 
-`MiSPlayApp` binds its time label to those properties. Updates come from JavaFX property notifications without a polling timer.
+A listener copies playback-position updates from the active `MediaPlayer` into the service's current-time property. Updates from replaced players are ignored.
 
-The `formatTime()` helper displays minutes and seconds, adding hours for longer recordings. Unknown, indefinite or invalid values display as `--:--`.
+The service also publishes requested seek positions immediately so the display updates while paused. Subsequent player notifications update the position during playback.
 
-When replacing or disposing of a player, the service disconnects both bindings and resets elapsed time to zero and duration to unknown before releasing the player.
+Duration remains bound to the source media's duration property. `MiSPlayApp` binds its time label to the two service properties. No application polling timer is used.
 
+`formatTime()` displays minutes and seconds, adding hours for longer recordings. Unavailable or invalid values display as `--:--`.
+
+During disposal, the service clears its active-player reference, unbinds duration, resets both time properties and disposes of the previous player.
+
+### Seeking
+
+The seek slider represents playback position in seconds. Its maximum follows the track duration. It is disabled when duration is unavailable, non-finite or zero.
+
+Automatic slider updates use the `updatingSeekSlider` flag to avoid triggering another seek. Position updates leave the handle alone while the user is dragging it.
+
+Dragging seeks when the handle is released. Track clicks and keyboard adjustments also request seeks. Keyboard adjustments use a five-second increment.
+
+`AudioService.seek()` rejects invalid values and clamps requested positions between zero and the track duration.
+
+### Track completion
+
+When a track finishes, `onEndOfMedia` requests `stop()`, which resets its position to zero.
+
+After the stop completes, `onStopped` requests `pause()` so the track remains available for seeking. Both handlers check that their player is still active.
+
+Playback stays silent until Play is pressed. Play resumes from zero or from a position selected after completion.
 
 ### Threading
 
@@ -90,7 +111,14 @@ Use MP3 files outside the Git repository. A small set of known working files is 
 | M18 | Open an MP3 and let it play | Duration appears when available and elapsed time advances |
 | M19 | Pause, then resume | Elapsed time holds while paused and continues after resuming |
 | M20 | Open another MP3 during playback | Elapsed time resets and the new file's duration appears |
-| M21 | Let a track finish | Elapsed time returns to zero and the track duration remains displayed |
+| M21 | Let a track finish | Position returns to zero, duration remains displayed and audio stays silent |
+| M22 | Launch, then open an MP3 | Seek slider starts disabled, then enables and follows playback |
+| M23 | Drag the seek handle and hold it before releasing | Handle stays under user control; releasing seeks to the selected position |
+| M24 | Click the slider track and use Left/Right keys | Playback seeks; arrow keys adjust by approximately five seconds |
+| M25 | Pause, seek, then press Play | Position display updates while silent; Play resumes from the selected position |
+| M26 | Seek after a track finishes, then press Play | Position display updates while silent; Play starts from the selected position |
+| M27 | Open another MP3 | Slider position and range update for the replacement track |
+
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
 For a check failure, record the check ID, exact action, error text, JDK/JavaFX versions and whether the same file works elsewhere. Do not commit personal audio files as evidence.
@@ -131,7 +159,6 @@ For later checkpoints, update `CHANGELOG.md` when functionality changes. Update 
 
 ## Upcoming implementation notes
 
-- Prevent automatic seek-slider updates from fighting user input.
 - Attach callbacks to every replacement player. Store service-level callback intentions if consumers register before any player exists.
 - Give tracks stable identity before implementing persistent library/playlist relationships.
 - Keep scanning and artwork decoding out of virtualized cell updates.

@@ -14,6 +14,8 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Display the selected filename and playback errors.
 - Dispose of the previous audio player when switching files or closing the application.
 - Display elapsed playback time and track duration, with a placeholder while duration is unavailable.
+- Seek using the playback slider with mouse dragging, track clicks and keyboard controls.
+- Seek while paused or after a track finishes without starting playback.
 
 ## Technology
 
@@ -72,7 +74,7 @@ Run the [manual playback checks](docs/DEVELOPMENT.md#manual-checks) before commi
 
 ## Next milestone
 
-- Seeking without fighting playback-driven slider updates.
+- Add an in-memory song list using a virtualized JavaFX ListView.
 
 ## Planned features
 

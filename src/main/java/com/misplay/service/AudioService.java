@@ -34,7 +34,13 @@ public class AudioService {
             MediaPlayer nextPlayer = new MediaPlayer(media);
             player = nextPlayer;
 
-            currentTime.bind(nextPlayer.currentTimeProperty());
+            nextPlayer.currentTimeProperty().addListener(
+                    (observable, oldTime, newTime) -> {
+                        if (player == nextPlayer) {
+                            currentTime.set(newTime);
+                        }
+                    }
+            );
             duration.bind(media.durationProperty());
 
             media.setOnError(() ->
@@ -43,7 +49,17 @@ public class AudioService {
             nextPlayer.setOnError(() ->
                     handleError(nextPlayer, nextPlayer.getError()));
 
-            nextPlayer.setOnEndOfMedia(nextPlayer::stop);
+            nextPlayer.setOnEndOfMedia(() -> {
+                if (player == nextPlayer) {
+                    nextPlayer.stop();
+                }
+            });
+
+            nextPlayer.setOnStopped(() -> {
+                if (player == nextPlayer) {
+                    nextPlayer.pause();
+                }
+            });
             nextPlayer.setVolume(volume);
             nextPlayer.play();
 
@@ -65,11 +81,39 @@ public class AudioService {
         }
     }
 
+    public void seek(Duration position) {
+        if (player == null || position == null) {
+            return;
+        }
+
+        Duration total = duration.get();
+
+        if (total == null) {
+            return;
+        }
+
+        double requestedSeconds = position.toSeconds();
+        double totalSeconds = total.toSeconds();
+
+        if (!Double.isFinite(requestedSeconds)
+                || !Double.isFinite(totalSeconds)
+                || totalSeconds <= 0) {
+            return;
+        }
+
+        double clampedSeconds = Math.max(
+                0, Math.min(requestedSeconds, totalSeconds)
+        );
+
+        Duration target = Duration.seconds(clampedSeconds);
+        player.seek(target);
+        currentTime.set(target);
+    }
+
     public void dispose() {
         MediaPlayer previousPlayer = player;
         player = null;
 
-        currentTime.unbind();
         duration.unbind();
 
         currentTime.set(Duration.ZERO);

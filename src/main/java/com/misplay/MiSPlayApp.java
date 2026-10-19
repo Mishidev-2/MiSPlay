@@ -21,6 +21,7 @@ import java.io.File;
 public class MiSPlayApp extends Application {
 
     private AudioService audioService;
+    private boolean updatingSeekSlider;
 
     @Override
     public void start(Stage stage) {
@@ -52,6 +53,50 @@ public class MiSPlayApp extends Application {
                         audioService.durationProperty()
                 )
         );
+        Slider seekSlider = new Slider(0, 1, 0);
+        seekSlider.setMaxWidth(420);
+        seekSlider.setBlockIncrement(5);
+
+// Refresh the slider when playback time or duration changes.
+        audioService.currentTimeProperty().addListener(
+                (observable, oldTime, newTime) ->
+                        updateSeekSlider(seekSlider)
+        );
+
+        audioService.durationProperty().addListener(
+                (observable, oldDuration, newDuration) ->
+                        updateSeekSlider(seekSlider)
+        );
+
+// Handle clicks on the slider track and keyboard adjustments.
+        seekSlider.valueProperty().addListener(
+                (observable, oldValue, newValue) -> {
+                    if (!updatingSeekSlider
+                            && !seekSlider.isValueChanging()
+                            && !seekSlider.isDisabled()) {
+                        audioService.seek(
+                                Duration.seconds(newValue.doubleValue())
+                        );
+                    }
+                }
+        );
+
+// Seek once when the user finishes dragging the handle.
+        seekSlider.valueChangingProperty().addListener(
+                (observable, wasChanging, isChanging) -> {
+                    if (wasChanging
+                            && !isChanging
+                            && !updatingSeekSlider
+                            && !seekSlider.isDisabled()) {
+                        audioService.seek(
+                                Duration.seconds(seekSlider.getValue())
+                        );
+                    }
+                }
+        );
+
+        updateSeekSlider(seekSlider);
+
 
         FileChooser chooser = new FileChooser();
         chooser.setTitle("Open an MP3");
@@ -114,6 +159,7 @@ public class MiSPlayApp extends Application {
                 15,
                 trackLabel,
                 timeLabel,
+                seekSlider,
                 controls,
                 volumeControls,
                 errorLabel
@@ -124,6 +170,42 @@ public class MiSPlayApp extends Application {
         stage.setTitle("MiSPlay");
         stage.setScene(new Scene(root, 640, 360));
         stage.show();
+    }
+
+    private void updateSeekSlider(Slider slider) {
+        Duration total = audioService.durationProperty().get();
+
+        double totalSeconds = total == null
+                ? Double.NaN
+                : total.toSeconds();
+
+        boolean canSeek = Double.isFinite(totalSeconds)
+                && totalSeconds > 0;
+
+        updatingSeekSlider = true;
+
+        try {
+            slider.setDisable(!canSeek);
+            slider.setMax(canSeek ? totalSeconds : 1);
+
+            if (!canSeek) {
+                slider.setValueChanging(false);
+                slider.setValue(0);
+            } else if (!slider.isValueChanging()) {
+                Duration elapsed =
+                        audioService.currentTimeProperty().get();
+
+                double seconds = elapsed == null
+                        ? 0
+                        : elapsed.toSeconds();
+
+                slider.setValue(
+                        Double.isFinite(seconds) ? seconds : 0
+                );
+            }
+        } finally {
+            updatingSeekSlider = false;
+        }
     }
 
     private static String formatTime(Duration time) {
