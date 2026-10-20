@@ -2,6 +2,7 @@ package com.misplay;
 
 import com.misplay.model.PlaybackQueue;
 import com.misplay.service.AudioService;
+import com.misplay.service.ArtworkService;
 import com.misplay.model.RepeatMode;
 import com.misplay.service.LibraryService;
 import com.misplay.model.TrackMetadata;
@@ -14,6 +15,9 @@ import javafx.beans.binding.StringBinding;
 import javafx.scene.Scene;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
+import javafx.scene.layout.StackPane;
+import javafx.scene.image.ImageView;
+import javafx.scene.text.TextAlignment;
 
 import javafx.scene.control.Slider;
 import javafx.scene.control.TextField;
@@ -57,9 +61,11 @@ public class MiSPlayApp extends Application {
     private boolean updatingSeekSlider;
     private final LibraryService libraryService = new LibraryService();
     private final PlaybackQueue playbackQueue = new PlaybackQueue();
+    private final ArtworkService artworkService = new ArtworkService();
 
     private StringBinding titleBinding;
     private StringBinding detailsBinding;
+
 
     @Override
     public void start(Stage stage) {
@@ -253,6 +259,7 @@ public class MiSPlayApp extends Application {
 
         Consumer<File> playFile = file -> {
             loadMetadata(file, trackLabel, metadataLabel);
+            artworkService.showArtwork(file);
             errorLabel.setText("");
             playButton.setDisable(false);
             pauseButton.setDisable(false);
@@ -357,7 +364,7 @@ public class MiSPlayApp extends Application {
         emptyLabel.textProperty().bind(
                 Bindings.createStringBinding(
                         () -> libraryService.getTracks().isEmpty()
-                                ? "Use Add MP3s to build your song list."
+                                ? "Use Add MP3s or Add Folder to build your song list."
                                 : "No songs match your search.",
                         libraryService.getTracks()
                 )
@@ -492,12 +499,50 @@ public class MiSPlayApp extends Application {
 
         playbackOptions.setAlignment(Pos.CENTER);
 
+        ImageView coverView = new ImageView();
+        coverView.setFitWidth(128);
+        coverView.setFitHeight(128);
+        coverView.setPreserveRatio(true);
+        coverView.setSmooth(true);
+        coverView.imageProperty().bind(artworkService.imageProperty());
+
+        Label coverPlaceholder = new Label();
+        coverPlaceholder.setWrapText(true);
+        coverPlaceholder.setMaxWidth(112);
+        coverPlaceholder.setAlignment(Pos.CENTER);
+        coverPlaceholder.setTextAlignment(TextAlignment.CENTER);
+        coverPlaceholder.textProperty().bind(artworkService.messageProperty());
+        coverPlaceholder.visibleProperty().bind(
+                artworkService.imageProperty().isNull()
+        );
+        coverPlaceholder.managedProperty().bind(
+                coverPlaceholder.visibleProperty()
+        );
+
+        StackPane coverPane = new StackPane(coverPlaceholder, coverView);
+        coverPane.setMinSize(128, 128);
+        coverPane.setPrefSize(128, 128);
+        coverPane.setMaxSize(128, 128);
+        coverPane.setStyle(
+                "-fx-background-color: -fx-control-inner-background;"
+                        + "-fx-border-color: -fx-box-border;"
+                        + "-fx-background-radius: 6;"
+                        + "-fx-border-radius: 6;"
+        );
+
+        VBox nowPlayingText = new VBox(6, trackLabel, metadataLabel);
+        nowPlayingText.setAlignment(Pos.CENTER_LEFT);
+        nowPlayingText.setMinWidth(0);
+        HBox.setHgrow(nowPlayingText, Priority.ALWAYS);
+
+        HBox nowPlayingRow = new HBox(16, coverPane, nowPlayingText);
+        nowPlayingRow.setAlignment(Pos.CENTER_LEFT);
+
         VBox root = new VBox(
                 12,
                 searchField,
                 songList,
-                trackLabel,
-                metadataLabel,
+                nowPlayingRow,
                 timeLabel,
                 seekSlider,
                 controls,
@@ -512,7 +557,7 @@ public class MiSPlayApp extends Application {
         root.setPadding(new Insets(20));
 
         stage.setTitle("MiSPlay");
-        stage.setScene(new Scene(root, 760, 560));
+        stage.setScene(new Scene(root, 760, 640));
         stage.show();
     }
 
@@ -623,6 +668,7 @@ public class MiSPlayApp extends Application {
             detailsBinding.dispose();
         }
 
+        artworkService.close();
         libraryService.close();
 
         if (audioService != null) {

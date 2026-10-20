@@ -1,40 +1,41 @@
 # MiSPlay
 
-A personal Windows 11 desktop music player built with Java 25 and JavaFX. The project is being developed incrementally, with an emphasis on understandable Java OOP, responsive UI behavior and measured resource use.
+A personal Windows 11 desktop music player built with Java 25 and JavaFX. The project is developed in small increments, with an emphasis on understandable Java OOP, responsive controls and measured resource use.
 
-**Status:** working MP3 playback prototype. Development tools and basic playback have been reported working on Windows 11. Library management and packaging are planned work.
+**Status:** working MP3 prototype with a session-only library, background metadata loading, folder importing and embedded album artwork. Playback, folder importing and artwork have been reported working by the developer. Persistent storage and Windows packaging are upcoming work.
 
 ## Current features
 
-- Select a local MP3 using a file chooser.
-- Automatically play selected MP3 files using the current volume setting.
-- Adjust volume from 0% to 100%, retaining the setting across track changes during the current session.
-- Pause and resume playback.
-- Replace the current track when another MP3 is opened.
-- Display the selected filename and playback errors.
-- Dispose of the previous audio player when switching files or closing the application.
-- Display elapsed playback time and track duration, with a placeholder while duration is unavailable.
-- Seek using the playback slider with mouse dragging, track clicks and keyboard controls.
-- Seek while paused or after a track finishes without starting playback.
-- Session-only song list using a virtualized JavaFX ListView.
+### Playback
+
+- Open a local MP3 and start a single-song playback queue.
+- Pause and resume playback, or replace the current song by opening another file.
+- Adjust application volume from 0% to 100%; the setting carries across track changes during the session.
+- Display elapsed time and duration, with a placeholder when duration is unavailable.
+- Seek by dragging, clicking the slider track or using keyboard controls, including while paused or after completion.
+- Navigate with Previous and Next through a queue captured from the visible library results.
+- Advance automatically, with Repeat Off, Repeat All and Repeat One modes.
+- Shuffle with consistent Previous/Next navigation and restoration of the captured order when shuffle is disabled.
+- Preserve the active queue during searches and imports.
+- Display playback errors and dispose of the previous audio player when switching files or closing the application.
+
+### Library and metadata
+
 - Add multiple MP3s without changing playback.
-- Play a song by double-clicking its row or pressing Enter.
-- Prevent duplicate imports using normalized absolute file paths.
-- Search by filename and cached title, artist or album, with automatic result updates when metadata loads.
-- Search results update as files are imported, while current playback continues.
-- Manual Previous/Next navigation through a queue captured from the visible song list.
-- Queue order stays stable during searches and imports.
-- Open MP3 starts a single-song queue.
-- Automatically advance through the captured playback queue.
-- Finish silently at zero after the final queued song.
-- Repeat Off, Repeat All and Repeat One, with manual track navigation.
-- Shuffle playback with consistent Previous/Next navigation and restoration of the original queue order when disabled.
-- Now-playing title, artist and album read from MP3 tags using a background worker.
-- Filename and Unknown artist/album fallbacks for missing metadata.
-- Session metadata caching: successful reads are reused when revisiting or repeating a track.
-- Virtualized library rows displaying cached song titles and artists.
-- Automatic background metadata loading.
-- Import MP3s from folders and subfolders using a cancellable background scan, with file counts and duplicate detection.
+- Import folders and subfolders using a cancellable background scan, with file counts and an import summary.
+- Match MP3 extensions without regard to case during folder scanning, skip unreadable child entries and prevent duplicate normalized paths.
+- Browse a virtualized song list with reusable fixed-height rows; start a song by double-clicking or pressing Enter.
+- Read title, artist and album tags for imported tracks in the background, without requiring playback.
+- Prioritize the selected song's pending metadata read after the current read finishes.
+- Display filename and Unknown artist/album fallbacks when tags are missing.
+- Search filenames and cached titles, artists and albums, with results updating as metadata arrives.
+- Reuse successful metadata reads for the current session, including across queue changes and duplicate imports.
+
+### Album artwork
+
+- Display the playing song's first stored embedded cover beside its metadata.
+- Load artwork on a background worker and keep an eight-entry cache of thumbnails fitted within 192 by 192 pixels.
+- Show placeholders for missing or unreadable covers and prevent an older result from replacing the selected song's artwork.
 
 ## Technology
 
@@ -42,19 +43,20 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 | --- | --- |
 | Language and runtime | Java 25; development environment uses Eclipse Temurin 25.0.3 |
 | UI and audio | JavaFX 25.0.2: `javafx-controls` and `javafx-media` |
+| MP3 tags and embedded artwork | Jaudiotagger 3.0.1 |
 | Build and dependency management | Maven; IntelliJ IDEA's bundled Maven works |
 | Compiler plugin | `maven-compiler-plugin` 3.14.1 |
 | Application launcher | `javafx-maven-plugin` 0.0.8 |
 | Version control | Git |
 
-FXML, Jaudiotagger and SQLite are not dependencies of the current prototype. They will be introduced when the corresponding features are implemented.
+The UI is constructed directly in Java; FXML is not used. SQLite has not been introduced yet.
 
 ## Requirements
 
 - Windows 11 is the current development and verification target.
 - A JDK 25 installation.
 - IntelliJ IDEA with Maven support, or a standalone Maven installation.
-- Internet access for the initial Maven dependency downloads. Normal playback uses local files.
+- Internet access for the initial Maven dependency downloads. Normal playback, metadata and artwork reading use local files.
 
 ## Run in IntelliJ IDEA
 
@@ -62,11 +64,11 @@ FXML, Jaudiotagger and SQLite are not dependencies of the current prototype. The
 2. Select JDK 25 as the project SDK and the Maven Runner JRE.
 3. Open the Maven tool window and reload/sync the Maven project. Wait for dependencies to download.
 4. Expand **Plugins → javafx** and run **javafx:run**.
-5. Click **Open MP3** and select a local file.
+5. Use **Open MP3** to start a single song, or **Add MP3s** / **Add Folder** to populate the library, then double-click a row or press Enter.
 
-Maven's run process remains active while the application window is open. Closing the window should stop audio playback and finish the run.
+Maven's run process remains active while the application window is open. Closing the window should stop audio, close the background services and finish the run.
 
-If standalone Maven is available on your terminal's `PATH`, the equivalent command from the project root is:
+If standalone Maven is available on your terminal's `PATH`, run this from the project root:
 
 ```powershell
 mvn javafx:run
@@ -79,45 +81,54 @@ IntelliJ's bundled Maven does not automatically make `mvn` available in PowerShe
 | Path | Responsibility |
 | --- | --- |
 | `pom.xml` | Java version, dependencies and Maven plugins |
-| `src/main/java/com/misplay/MiSPlayApp.java` | Window, controls, displayed messages and application shutdown |
+| `src/main/java/com/misplay/MiSPlayApp.java` | Window, controls, bindings, file/folder choosers and application shutdown |
 | `src/main/java/com/misplay/service/AudioService.java` | Audio loading, playback, errors and player disposal |
+| `src/main/java/com/misplay/service/LibraryService.java` | Session library, path lookup, metadata scheduling and folder-scan coordination |
+| `src/main/java/com/misplay/service/MetadataService.java` | Reading title, artist and album strings with fallbacks |
+| `src/main/java/com/misplay/service/FolderScanTask.java` | Background folder traversal, counts and cancellation checks |
+| `src/main/java/com/misplay/service/ArtworkService.java` | Selected-song artwork loading, thumbnail caching and display properties |
+| `src/main/java/com/misplay/model/` | Track metadata/status, folder-scan results and playback queue/repeat models |
 | `docs/DEVELOPMENT.md` | Architecture, manual checks and development conventions |
 | `docs/GIT_SETUP.md` | Initial commit and remote repository setup |
-| `CHANGELOG.md` | Human-readable record of changes |
+| `CHANGELOG.md` | Human-readable record of completed changes |
 | `.gitignore` | Generated files, local IDE configuration and personal audio excluded from Git |
 | `.gitattributes` | Consistent text line endings |
 
 ## Verification
 
-Run the [manual playback checks](docs/DEVELOPMENT.md#manual-checks) before committing playback changes. Automated tests have not been introduced yet. The current working playback checkpoint has been confirmed by the developer; the complete manual-check matrix has not been individually recorded.
+Run the [manual checks](docs/DEVELOPMENT.md#manual-checks) relevant to each change. Working checkpoints have been reported by the developer; the complete per-check results have not been recorded. Automated project tests and a memory/CPU profiling baseline have not been introduced yet.
+
+The development guide distinguishes the manual checklist from the narrower headless artwork checks performed during development. A successful Maven validation alone does not compile the application or verify playback.
 
 ## Next milestone
 
-- Display embedded album artwork for the current song with bounded memory use.
+- Introduce SQLite persistence, starting with remembering imported tracks after restart, then saving cached metadata and handling changed files.
 
 ## Planned features
 
-- A virtualized song library with background folder scanning.
-- Metadata and artwork reading with Jaudiotagger.
-- Bounded thumbnail caching and refresh when files change.
-- SQLite persistence, search and manual playlists.
-- Playback queues, shuffle and repeat.
-- Synchronized LRC lyrics, Unicode support and plain embedded lyrics.
-- Embedded timed-lyrics support and LRC export where the source contains usable timestamps.
-- System tray controls and an optional mini-player.
+- Persistent library storage and metadata refresh when files change.
+- Manual playlists and favorites, including saved ordering.
+- Additional metadata such as track number and improved handling of multiple artists.
+- Synchronized sidecar LRC lyrics with line highlighting and seeking.
+- Embedded lyric display and LRC export when usable timestamps are present.
+- System tray controls and an optional mini-player/overlay.
 - A bundled Windows runtime and executable/installer through `jpackage`.
+- Manual or startup update checks.
 
 The future Python LRC generator is a separate project. AI models are not part of normal music playback.
 
 ## Known limitations
 
-- The now-playing artist display uses the first stored artist value.
-- One test song, Yaezakura by HoyoMix, displays a shortened artist/details line. The cause has not yet been diagnosed.
-- Cached metadata lasts for the current session and does not yet refresh automatically after file edits.
+- MP3 is the current import/playback format; other audio formats are not part of this checkpoint.
+- The library, queue, volume, repeat/shuffle settings and caches are session-only. The library starts empty after restart and volume starts at 50%.
+- Metadata uses the first stored title, artist and album values. Yaezakura by HoyoMix displays a shortened artist/details line; the cause remains undiagnosed.
+- Cached metadata and artwork do not detect file edits. Failed metadata reads are not automatically retried during the current launch.
+- Artwork uses the first stored embedded cover. Linked URLs and external cover files are not loaded, and images that cannot be decoded into readable pixels use the unavailable placeholder.
+- Artwork payloads larger than 8 MiB are rejected after tag parsing. The thumbnail cache limit does not cap temporary parser/decoder allocations or total process memory.
 
 ## Performance
 
-Low memory use, smooth scrolling and low idle CPU are goals. This prototype has not been profiled, and no memory target is claimed as achieved. Measurements should distinguish the application process from the IDE and Maven, and should record the JDK, workload and measurement method.
+Low memory use, smooth scrolling and low idle CPU remain goals. The prototype has not been profiled, and no process-memory target is claimed as achieved. Measure the application separately from the IDE and Maven, and record the JDK, workload and measurement method.
 
 ## Development
 
