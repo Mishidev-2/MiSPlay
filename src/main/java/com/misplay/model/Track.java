@@ -10,7 +10,8 @@ import java.util.Locale;
 public final class Track {
     private final File file;
     private final ReadOnlyObjectWrapper<TrackMetadata> metadata;
-    private boolean metadataLoaded;
+    private final ReadOnlyObjectWrapper<MetadataStatus> metadataStatus =
+            new ReadOnlyObjectWrapper<>(MetadataStatus.PENDING);
 
     public Track(File file) {
         this.file = Objects.requireNonNull(file);
@@ -34,13 +35,30 @@ public final class Track {
         return metadata.getReadOnlyProperty();
     }
 
+    public MetadataStatus getMetadataStatus() {
+        return metadataStatus.get();
+    }
+
+    public ReadOnlyObjectProperty<MetadataStatus> metadataStatusProperty() {
+        return metadataStatus.getReadOnlyProperty();
+    }
+
+    public void markMetadataLoading() {
+        metadataStatus.set(MetadataStatus.LOADING);
+    }
+
+    public void markMetadataFailed() {
+        metadataStatus.set(MetadataStatus.FAILED);
+    }
+
     public boolean isMetadataLoaded() {
-        return metadataLoaded;
+        return getMetadataStatus() == MetadataStatus.LOADED;
     }
 
     public void setMetadata(TrackMetadata value) {
         TrackMetadata checkedValue = Objects.requireNonNull(value);
-        metadataLoaded = true;
+
+        metadataStatus.set(MetadataStatus.LOADED);
         metadata.set(checkedValue);
     }
 

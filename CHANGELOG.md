@@ -35,6 +35,9 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Library rows displaying cached song titles and artists.
 - Search across filenames, titles, artists and albums, including automatic filtering when metadata changes.
 - Binding cleanup when virtualized cells are reused.
+- Automatic background metadata loading for imported tracks.
+- Priority metadata loading for the selected song.
+- Continued metadata loading after an unreadable file.
 
 ### Verification
 

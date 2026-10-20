@@ -33,6 +33,8 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Filename and Unknown artist/album fallbacks for missing metadata.
 - Session metadata caching: successful reads are reused when revisiting or repeating a track.
 - Virtualized library rows displaying cached song titles and artists.
+- Automatic background metadata loading.
+
 ## Technology
 
 | Component | Current choice |
@@ -90,7 +92,7 @@ Run the [manual playback checks](docs/DEVELOPMENT.md#manual-checks) before commi
 
 ## Next milestone
 
-- Load metadata for all imported tracks in the background without requiring playback.
+- Background folder importing
 
 ## Planned features
 
@@ -108,7 +110,6 @@ The future Python LRC generator is a separate project. AI models are not part of
 
 ## Known limitations
 
-- Metadata currently loads when a track is played. Unplayed tracks use fallback values until their metadata loads.
 - The now-playing artist display uses the first stored artist value.
 - One test song, Yaezakura by HoyoMix, displays a shortened artist/details line. The cause has not yet been diagnosed.
 - Cached metadata lasts for the current session and does not yet refresh automatically after file edits.

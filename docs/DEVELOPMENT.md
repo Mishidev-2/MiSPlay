@@ -175,43 +175,51 @@ Missing or blank titles fall back to the filename. Missing artists and albums us
 
 The service returns a `TrackMetadata` record containing strings. Parser objects and embedded artwork are not retained by the application.
 
+`LibraryService` automatically schedules metadata reads when new tracks are imported. Library rows and search results update as reads finish, without requiring playback.
+
 The shared `playFile` action calls `loadMetadata`, covering Open MP3, row activation, manual navigation and automatic queue advancement.
 
-The filename appears immediately while metadata loads. Successful reads replace it with the embedded title and display the artist and album below.
+`loadMetadata` releases the previous label bindings and binds the now-playing labels to the selected Track's metadata and loading status. Cached metadata appears immediately. Tracks awaiting metadata display their filename fallback and a waiting or reading message.
 
-Read failures retain the filename, show a metadata-unavailable message and log the exception independently of audio errors.
+Selecting a track also asks `LibraryService` to prioritize its pending metadata read. The current read finishes first.
 
-Library rows and search use cached metadata from Track objects. Successful now-playing reads update the model, which notifies the row bindings and filtered library.
+Completed reads update their own Track objects. The now-playing labels observe only the selected Track, so another track's result cannot replace the current song's details.
+
+Read failures retain the filename fallback, show a metadata-unavailable message for the selected track and log the exception independently of audio errors.
 
 Known issue: Yaezakura displays a shortened artist/details line even though Windows Properties lists artist and album information. The cause remains undiagnosed and investigation is deferred.
 
 ### Session metadata cache
 
-`LibraryService` maintains a map from normalized file paths to Track objects. Reimporting a known path preserves its existing model and cached metadata.
+`LibraryService` maintains a map from normalized file paths to Track objects. Reimporting a known path preserves its existing model and does not schedule another metadata read.
 
-A new Track contains filename and Unknown artist/album fallbacks, with `metadataLoaded` initially false.
+A new Track contains filename and Unknown artist/album fallbacks. Its observable metadata status starts as PENDING.
 
-An accepted successful read calls `Track.setMetadata` on the JavaFX Application Thread. This stores the result, marks metadata as loaded and notifies property listeners. A successful read with missing tags also caches its fallback values.
+Metadata status progresses through PENDING, LOADING and either LOADED or FAILED. `isMetadataLoaded()` returns true only when the status is LOADED.
 
-`loadMetadata` clears the previous task reference and requests cancellation before checking the cache. If metadata is already loaded, it displays the stored values and returns without creating another read task.
+A successful read calls `Track.setMetadata` on the JavaFX Application Thread. This marks the metadata as loaded, stores the result and notifies property listeners. Successful reads with missing tags also cache their fallback values.
 
-Clearing the task reference also prevents an older pending result from overwriting a cached song's display.
+Switching songs does not cancel metadata reads. A completed read remains useful because its result is cached on the corresponding Track, even if that track is no longer playing.
 
-Failed, canceled or stale reads do not populate the cache. Rapid skipping can therefore cause another read when a previously skipped song is revisited. Verify caching by waiting for metadata to appear before switching songs.
+A failed read marks the Track as FAILED and allows loading to continue with the next waiting track. Failed reads are not automatically retried during the current launch.
 
 The cache contains metadata strings and follows the lifetime of the current library session. It does not persist across launches or detect file edits yet.
 
 ### Threading
 
-JavaFX controls, observable library collections and playback queue state are updated on the JavaFX Application Thread.
+JavaFX controls, observable library collections, Track properties and playback queue state are updated on the JavaFX Application Thread.
 
-Metadata reads run through `Task<TrackMetadata>` on a single background executor. The task's `call` method reads the file and returns data without accessing UI controls.
+`LibraryService` owns the metadata reader, a single background executor, a deque of waiting tracks and the active metadata task. Scheduling and changes to the waiting deque happen on the JavaFX Application Thread.
 
-Success and failure handlers run on the JavaFX Application Thread and update the labels there.
+Only one metadata read runs at a time. Each `Task<TrackMetadata>` reads its captured file in `call()` and returns data without accessing UI controls.
 
-Starting another read requests cancellation of the previous task. Each result handler also checks that its task is still the current `metadataTask`, preventing an older result from overwriting a newer song's details.
+Success and failure handlers run on the JavaFX Application Thread. They update the corresponding Track and schedule the next waiting read. Label bindings, library cells and search filtering respond to the model changes.
 
-Application shutdown clears the current task reference, requests cancellation, shuts down the metadata executor and disposes the audio player.
+Prioritizing a track moves it to the front of the waiting deque. It does not interrupt the active read.
+
+Result handlers check that the library is still open and that their task is still the active metadata task.
+
+Application shutdown disposes the now-playing bindings and calls `LibraryService.close()`. Closing clears waiting metadata work, clears the active task reference, requests cancellation of the active task and shuts down the metadata executor. The application also disposes the audio player.
 
 ## Manual checks
 

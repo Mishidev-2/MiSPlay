@@ -6,13 +6,9 @@ import com.misplay.model.RepeatMode;
 import com.misplay.service.LibraryService;
 import com.misplay.model.TrackMetadata;
 import com.misplay.model.Track;
-import com.misplay.service.MetadataService;
 
 import java.util.ArrayList;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
-import javafx.concurrent.Task;
 import javafx.beans.binding.StringBinding;
 
 import javafx.scene.Scene;
@@ -58,14 +54,9 @@ public class MiSPlayApp extends Application {
     private boolean updatingSeekSlider;
     private final LibraryService libraryService = new LibraryService();
     private final PlaybackQueue playbackQueue = new PlaybackQueue();
-    private final MetadataService metadataService = new MetadataService();
-    private final ExecutorService metadataExecutor =
-            Executors.newSingleThreadExecutor(runnable -> {
-                Thread worker = new Thread(runnable, "misplay-metadata");
-                worker.setDaemon(true);
-                return worker;
-            });
-    private Task<TrackMetadata> metadataTask;
+
+    private StringBinding titleBinding;
+    private StringBinding detailsBinding;
 
 
     @Override
@@ -467,67 +458,40 @@ public class MiSPlayApp extends Application {
             Label titleLabel,
             Label detailsLabel
     ) {
-        Task<TrackMetadata> previousTask = metadataTask;
-        metadataTask = null;
-
-        if (previousTask != null) {
-            previousTask.cancel();
-        }
-
         Track track = libraryService.getTrack(file);
-        TrackMetadata cached = track.getMetadata();
 
-        titleLabel.setText(cached.title());
+        titleLabel.textProperty().unbind();
+        detailsLabel.textProperty().unbind();
 
-        if (track.isMetadataLoaded()) {
-            detailsLabel.setText(
-                    cached.artist() + " — " + cached.album()
-            );
-
-            return;
+        if (titleBinding != null) {
+            titleBinding.dispose();
         }
 
-        detailsLabel.setText("Reading tags...");
+        if (detailsBinding != null) {
+            detailsBinding.dispose();
+        }
 
-        Task<TrackMetadata> nextTask = new Task<>() {
-            @Override
-            protected TrackMetadata call() throws Exception {
-                return metadataService.read(file);
-            }
-        };
+        titleBinding = Bindings.createStringBinding(
+                () -> track.getMetadata().title(),
+                track.metadataProperty()
+        );
 
-        metadataTask = nextTask;
+        detailsBinding = Bindings.createStringBinding(
+                () -> switch (track.getMetadataStatus()) {
+                    case PENDING -> "Waiting for tags...";
+                    case LOADING -> "Reading tags...";
+                    case FAILED -> "Tags unavailable — showing filename.";
+                    case LOADED -> track.getMetadata().artist()
+                            + " — " + track.getMetadata().album();
+                },
+                track.metadataProperty(),
+                track.metadataStatusProperty()
+        );
 
-        nextTask.setOnSucceeded(event -> {
-            if (metadataTask != nextTask) {
-                return;
-            }
+        titleLabel.textProperty().bind(titleBinding);
+        detailsLabel.textProperty().bind(detailsBinding);
 
-            TrackMetadata metadata = nextTask.getValue();
-            track.setMetadata(metadata);
-
-            titleLabel.setText(metadata.title());
-            detailsLabel.setText(
-                    metadata.artist() + " — " + metadata.album()
-            );
-        });
-
-        nextTask.setOnFailed(event -> {
-            if (metadataTask != nextTask) {
-                return;
-            }
-
-            detailsLabel.setText(
-                    "Tags unavailable — showing filename."
-            );
-
-            System.err.println(
-                    "Metadata read failed for " + file.getName()
-                            + ": " + nextTask.getException()
-            );
-        });
-
-        metadataExecutor.execute(nextTask);
+        libraryService.prioritizeMetadata(file);
     }
 
     private void updateSeekSlider(Slider slider) {
@@ -588,14 +552,15 @@ public class MiSPlayApp extends Application {
 
     @Override
     public void stop() {
-        Task<TrackMetadata> previousTask = metadataTask;
-        metadataTask = null;
-
-        if (previousTask != null) {
-            previousTask.cancel();
+        if (titleBinding != null) {
+            titleBinding.dispose();
         }
 
-        metadataExecutor.shutdownNow();
+        if (detailsBinding != null) {
+            detailsBinding.dispose();
+        }
+
+        libraryService.close();
 
         if (audioService != null) {
             audioService.dispose();
