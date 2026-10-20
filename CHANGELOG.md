@@ -11,7 +11,7 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - `AudioService` ownership of the active media player, including disposal when a track is replaced or the application closes.
 - Adjustable application volume retained across track changes during the current session.
 - Elapsed time and duration display, an unavailable-duration placeholder, and mouse/keyboard seeking while playing, paused or after completion.
-- A session-only library with batch MP3 import and duplicate prevention based on normalized absolute paths.
+- An observable library with batch MP3 import and duplicate prevention based on normalized absolute paths.
 - A resizable, virtualized song list with reusable fixed-height cells and playback through double-click or Enter.
 - Playback queues captured from visible library results and preserved across searches and imports; Open MP3 creates a single-song queue.
 - Manual Previous/Next navigation and automatic queue advancement, preserving the current volume.
@@ -27,16 +27,24 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Folder-import summaries reporting newly added tracks and skipped unreadable entries; cancelled scans add no partial results.
 - Embedded now-playing album artwork loaded on a background worker, with an eight-entry least recently used cache of resized pixel-only thumbnails.
 - Missing/unreadable-cover placeholders and selection checks preventing older artwork results from replacing the current song's cover.
-- Shutdown handling for the audio player, label bindings, background metadata reads, folder scans and artwork work.
+- SQLite library-path persistence through Xerial SQLite JDBC 3.53.4.0, with a runtime `slf4j-nop` 1.7.36 binding and schema version 1.
+- `LibraryRepository` with ordered path loading, parameterized transactional batch inserts and unique normalized paths.
+- Background startup restoration of library membership and insertion order without automatic playback; import controls wait for restoration to finish.
+- A per-user `MiSPlay/library.db` under `LOCALAPPDATA`, with a `.misplay/library.db` fallback under Java's `user.home` directory.
+- Background save batches, loading/saving status, a Retry save action and preservation of pending paths after write failures.
+- Temporary session use when initial database loading fails, without resetting unreadable or newer-schema databases; missing file paths remain saved.
+- Shutdown handling for the audio player, label bindings, background metadata reads, folder scans and artwork work, plus draining accepted database writes and a final idempotent path save on normal close.
 
 ### Changed
 
 - Metadata scheduling is owned by `LibraryService`. Changing songs prioritizes a waiting read without cancelling the active read; now-playing labels observe only the selected track.
 - Library rows and search use cached metadata rather than filename-only display/matching.
+- Library membership and order now survive restart. Metadata/artwork caches, playback queues and playback settings remain session-only; restored tracks receive fresh background metadata reads.
 
 ### Verification
 
 - Maven validation and JavaFX window launch were confirmed on Windows 11.
-- The developer reported working playback/library metadata, folder importing and embedded artwork checkpoints. Detailed per-check Windows results have not been recorded.
+- The developer reported working playback/library metadata, folder importing, embedded artwork and SQLite library-path checkpoints. Detailed per-check Windows results have not been recorded.
 - Development-time headless artwork checks covered JPEG/PNG resizing, Unicode filenames, cache reuse/eviction, missing/damaged covers, invalid-file recovery, rapid selection changes and shutdown. These checks do not establish a full Windows playback regression result.
+- SQLite checks covered real database creation/restart, path normalization, duplicates/order, Unicode paths, transaction rollback, missing paths, schema rejection and corrupt-file preservation. Headless coordination/UI checks covered restore/import gating, queued writes/retry, folder imports/cancellation, responsive controls during a database lock, normal-close saves, process exit and no automatic playback. These used JDK 17/JavaFX 21.0.1 with substitutes for some unchanged services; they do not establish a full Java 25/JavaFX 25.0.2 Windows build or audio regression result.
 - No committed automated project test suite or memory/CPU profiling baseline has been recorded.

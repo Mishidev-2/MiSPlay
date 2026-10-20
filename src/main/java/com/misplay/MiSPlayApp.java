@@ -69,7 +69,7 @@ public class MiSPlayApp extends Application {
 
     @Override
     public void start(Stage stage) {
-        Label trackLabel = new Label("Open an MP3 to begin.");
+        Label trackLabel = new Label("Select a song to begin.");
         trackLabel.setWrapText(true);
         Label metadataLabel = new Label();
         metadataLabel.setWrapText(true);
@@ -85,10 +85,15 @@ public class MiSPlayApp extends Application {
         Button repeatButton = new Button();
         ToggleButton shuffleButton = new ToggleButton();
 
+        openButton.disableProperty().bind(libraryService.restoringLibraryProperty());
+        addButton.disableProperty().bind(libraryService.restoringLibraryProperty());
+
         Button addFolderButton = new Button("Add Folder");
 
         addFolderButton.disableProperty().bind(
-                libraryService.folderScanningProperty()
+                libraryService.folderScanningProperty().or(
+                        libraryService.restoringLibraryProperty()
+                )
         );
 
         DirectoryChooser folderChooser = new DirectoryChooser();
@@ -136,6 +141,35 @@ public class MiSPlayApp extends Application {
         cancelScanButton.setOnAction(
                 event -> libraryService.cancelFolderScan()
         );
+
+        ProgressIndicator libraryProgress = new ProgressIndicator();
+        libraryProgress.setPrefSize(18, 18);
+        libraryProgress.setMaxSize(18, 18);
+        libraryProgress.visibleProperty().bind(
+                libraryService.restoringLibraryProperty().or(
+                        libraryService.savingLibraryProperty()
+                )
+        );
+        libraryProgress.managedProperty().bind(libraryProgress.visibleProperty());
+
+        Label libraryStatusLabel = new Label();
+        libraryStatusLabel.setWrapText(true);
+        libraryStatusLabel.textProperty().bind(
+                libraryService.libraryStorageMessageProperty()
+        );
+        HBox.setHgrow(libraryStatusLabel, Priority.ALWAYS);
+
+        Button retrySaveButton = new Button("Retry save");
+        retrySaveButton.visibleProperty().bind(
+                libraryService.librarySaveFailedProperty()
+        );
+        retrySaveButton.managedProperty().bind(retrySaveButton.visibleProperty());
+        retrySaveButton.setOnAction(event -> libraryService.retryLibrarySave());
+
+        HBox libraryStatusRow = new HBox(
+                8, libraryProgress, libraryStatusLabel, retrySaveButton
+        );
+        libraryStatusRow.setAlignment(Pos.CENTER_LEFT);
 
         HBox folderStatusRow = new HBox(
                 8,
@@ -363,10 +397,13 @@ public class MiSPlayApp extends Application {
 
         emptyLabel.textProperty().bind(
                 Bindings.createStringBinding(
-                        () -> libraryService.getTracks().isEmpty()
-                                ? "Use Add MP3s or Add Folder to build your song list."
-                                : "No songs match your search.",
-                        libraryService.getTracks()
+                        () -> libraryService.restoringLibraryProperty().get()
+                                ? "Loading saved library..."
+                                : libraryService.getTracks().isEmpty()
+                                        ? "Use Add MP3s or Add Folder to build your song list."
+                                        : "No songs match your search.",
+                        libraryService.getTracks(),
+                        libraryService.restoringLibraryProperty()
                 )
         );
 
@@ -541,6 +578,7 @@ public class MiSPlayApp extends Application {
         VBox root = new VBox(
                 12,
                 searchField,
+                libraryStatusRow,
                 songList,
                 nowPlayingRow,
                 timeLabel,
@@ -559,6 +597,7 @@ public class MiSPlayApp extends Application {
         stage.setTitle("MiSPlay");
         stage.setScene(new Scene(root, 760, 640));
         stage.show();
+        libraryService.restoreLibrary();
     }
 
     private void loadMetadata(
