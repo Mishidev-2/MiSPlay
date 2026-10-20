@@ -29,6 +29,9 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Jaudiotagger integration for reading now-playing title, artist and album metadata.
 - Background metadata loading with cancellation requests and protection against stale results.
 - Fallback text for missing tags and metadata read failures.
+- Track model containing a file, observable metadata and a metadata-loaded flag.
+- Session metadata caching that survives queue changes and duplicate imports.
+- Protection against stale metadata results when switching to an already cached track.
 
 ### Verification
 

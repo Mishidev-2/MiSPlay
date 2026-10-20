@@ -5,6 +5,7 @@ import com.misplay.service.AudioService;
 import com.misplay.model.RepeatMode;
 import com.misplay.service.LibraryService;
 import com.misplay.model.TrackMetadata;
+import com.misplay.model.Track;
 import com.misplay.service.MetadataService;
 import javafx.concurrent.Task;
 
@@ -427,11 +428,26 @@ public class MiSPlayApp extends Application {
             Label titleLabel,
             Label detailsLabel
     ) {
-        if (metadataTask != null) {
-            metadataTask.cancel();
+        Task<TrackMetadata> previousTask = metadataTask;
+        metadataTask = null;
+
+        if (previousTask != null) {
+            previousTask.cancel();
         }
 
-        titleLabel.setText(file.getName());
+        Track track = libraryService.getTrack(file);
+        TrackMetadata cached = track.getMetadata();
+
+        titleLabel.setText(cached.title());
+
+        if (track.isMetadataLoaded()) {
+            detailsLabel.setText(
+                    cached.artist() + " — " + cached.album()
+            );
+
+            return;
+        }
+
         detailsLabel.setText("Reading tags...");
 
         Task<TrackMetadata> nextTask = new Task<>() {
@@ -449,6 +465,7 @@ public class MiSPlayApp extends Application {
             }
 
             TrackMetadata metadata = nextTask.getValue();
+            track.setMetadata(metadata);
 
             titleLabel.setText(metadata.title());
             detailsLabel.setText(

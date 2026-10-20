@@ -31,7 +31,7 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Shuffle playback with consistent Previous/Next navigation and restoration of the original queue order when disabled.
 - Now-playing title, artist and album read from MP3 tags using a background worker.
 - Filename and Unknown artist/album fallbacks for missing metadata.
-
+- Session metadata caching: successful reads are reused when revisiting or repeating a track.
 ## Technology
 
 | Component | Current choice |
@@ -110,6 +110,7 @@ The future Python LRC generator is a separate project. AI models are not part of
 - The song list and search currently use filenames.
 - The now-playing artist display uses the first stored artist value.
 - One test song, Yaezakura by HoyoMix, displays a shortened artist/details line. The cause has not yet been diagnosed.
+- Cached metadata lasts for the current session and does not yet refresh automatically after file edits.
 
 ## Performance
 

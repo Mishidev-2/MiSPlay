@@ -14,6 +14,7 @@ import java.io.IOException;
 
 public class MetadataService {
     public TrackMetadata read(File file) throws IOException {
+        System.out.println("Reading tags: " + file.getName());
         try {
             Tag tag = AudioFileIO.read(file).getTag();
 

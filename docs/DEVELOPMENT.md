@@ -17,6 +17,8 @@ The current checkpoint is local MP3 playback. Library scanning, metadata service
 | `RepeatMode` | Defines the available repeat choices: OFF, ALL and ONE. |
 | `MetadataService` | Reads title, artist and album tags and supplies fallbacks for missing fields. |
 | `TrackMetadata` | Immutable record containing the title, artist and album strings used for display. |
+| `LibraryService` | Maintains the imported file list and one Track per normalized path, preventing duplicates and preserving cached metadata. |
+| `Track` | Connects a file to observable metadata and records whether a successful metadata read has completed. |
 ### Opening a track
 
 1. The user chooses an MP3 in the file chooser.
@@ -181,9 +183,25 @@ The filename appears immediately while metadata loads. Successful reads replace 
 
 Read failures retain the filename, show a metadata-unavailable message and log the exception independently of audio errors.
 
-The song list and filename search are unchanged at this checkpoint. Metadata is not yet cached.
+The song list and search currently use filenames. Successful now-playing metadata reads are stored on the file's Track model and reused during the current session.
 
 Known issue: Yaezakura displays a shortened artist/details line even though Windows Properties lists artist and album information. The cause remains undiagnosed and investigation is deferred.
+
+### Session metadata cache
+
+`LibraryService` maintains a map from normalized file paths to Track objects. Reimporting a known path preserves its existing model and cached metadata.
+
+A new Track contains filename and Unknown artist/album fallbacks, with `metadataLoaded` initially false.
+
+An accepted successful read calls `Track.setMetadata` on the JavaFX Application Thread. This stores the result, marks metadata as loaded and notifies property listeners. A successful read with missing tags also caches its fallback values.
+
+`loadMetadata` clears the previous task reference and requests cancellation before checking the cache. If metadata is already loaded, it displays the stored values and returns without creating another read task.
+
+Clearing the task reference also prevents an older pending result from overwriting a cached song's display.
+
+Failed, canceled or stale reads do not populate the cache. Rapid skipping can therefore cause another read when a previously skipped song is revisited. Verify caching by waiting for metadata to appear before switching songs.
+
+The cache contains metadata strings and follows the lifetime of the current library session. It does not persist across launches or detect file edits yet.
 
 ### Threading
 
@@ -284,6 +302,14 @@ Unless a check specifies otherwise, start it with Repeat OFF and Shuffle OFF.
 | M77 | Play songs with Unicode tags. | Japanese, Korean and Chinese text displays correctly. |
 | M78 | Use pause, seeking, volume, repeat and shuffle after metadata loads. | Playback controls continue working. |
 | M79 | Close the application. | Audio stops and the application exits. |
+| M80 | Play A, wait for metadata, play B, wait, then return to A. | A and B are read once each; returning to A reuses cached metadata. |
+| M81 | Open an already cached file again using Open MP3. | Its existing model and metadata are preserved without creating a duplicate library entry. |
+| M82 | Let a cached song finish with Repeat ONE enabled. | Audio restarts without another metadata read. |
+| M83 | Quickly switch from an uncached song to a cached song. | The cached song's details remain displayed; an older result cannot overwrite them. |
+| M84 | Start another queue containing previously cached tracks. | Cached metadata remains available across queue changes. |
+| M85 | Exercise navigation, filename search, volume, seeking, repeat and shuffle. | Existing playback and library behavior continues working. |
+| M86 | Restart the application, reimport a previously cached file and play it. | Metadata is read again in the new session. |
+
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
 For a check failure, record the check ID, exact action, error text, JDK/JavaFX versions and whether the same file works elsewhere. Do not commit personal audio files as evidence.
