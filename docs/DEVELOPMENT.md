@@ -205,6 +205,22 @@ A failed read marks the Track as FAILED and allows loading to continue with the 
 
 The cache contains metadata strings and follows the lifetime of the current library session. It does not persist across launches or detect file edits yet.
 
+### Folder importing
+
+The Add Folder button opens a DirectoryChooser. Selecting a folder asks LibraryService to start a FolderScanTask on a dedicated background executor.
+
+The scanner searches the selected folder and its subfolders for regular files with a case-insensitive .mp3 extension. Symbolic links are not followed.
+
+Scanning collects file paths without modifying the library. After a successful scan, LibraryService.addFiles imports the results, removes duplicate paths through its existing lookup and schedules metadata reads.
+
+Unreadable entries below the selected root are logged and skipped. Failure to access the selected root fails the scan without importing its collected files.
+
+During scanning, the interface displays an indeterminate progress indicator, checked-file and discovered-MP3 counts, and a Cancel scan button. Add Folder is disabled until the scan finishes.
+
+Cancelling an active scan discards its collected results. A completed scan reports how many new tracks were added and how many unreadable entries were skipped.
+
+Importing does not start playback or modify the captured playback queue.
+
 ### Threading
 
 JavaFX controls, observable library collections, Track properties and playback queue state are updated on the JavaFX Application Thread.
@@ -220,6 +236,8 @@ Prioritizing a track moves it to the front of the waiting deque. It does not int
 Result handlers check that the library is still open and that their task is still the active metadata task.
 
 Application shutdown disposes the now-playing bindings and calls `LibraryService.close()`. Closing clears waiting metadata work, clears the active task reference, requests cancellation of the active task and shuts down the metadata executor. The application also disposes the audio player.
+
+Folder scanning uses a separate single-thread executor, allowing it to run alongside metadata reading. Scan completion imports files on the JavaFX Application Thread. Application shutdown also clears the active folder-scan reference, unbinds its status message, requests scan cancellation and shuts down the folder-scan executor.
 
 ## Manual checks
 

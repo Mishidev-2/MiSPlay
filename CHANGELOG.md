@@ -38,6 +38,9 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Automatic background metadata loading for imported tracks.
 - Priority metadata loading for the selected song.
 - Continued metadata loading after an unreadable file.
+- Folder importing, including nested subfolders and case-insensitive MP3 extensions.
+- Background folder scanning with file counts and cancellation.
+- Import summaries showing newly added tracks and skipped unreadable entries.
 
 ### Verification
 

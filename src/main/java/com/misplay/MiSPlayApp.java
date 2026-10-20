@@ -22,10 +22,13 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ToggleButton;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+import javafx.scene.control.ProgressIndicator;
 
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.Priority;
+
+import javafx.stage.DirectoryChooser;
 
 import java.util.List;
 import java.util.function.Consumer;
@@ -58,7 +61,6 @@ public class MiSPlayApp extends Application {
     private StringBinding titleBinding;
     private StringBinding detailsBinding;
 
-
     @Override
     public void start(Stage stage) {
         Label trackLabel = new Label("Open an MP3 to begin.");
@@ -76,6 +78,65 @@ public class MiSPlayApp extends Application {
         Button nextButton = new Button("Next");
         Button repeatButton = new Button();
         ToggleButton shuffleButton = new ToggleButton();
+
+        Button addFolderButton = new Button("Add Folder");
+
+        addFolderButton.disableProperty().bind(
+                libraryService.folderScanningProperty()
+        );
+
+        DirectoryChooser folderChooser = new DirectoryChooser();
+        folderChooser.setTitle("Add music folder");
+
+        addFolderButton.setOnAction(event -> {
+            File folder = folderChooser.showDialog(stage);
+
+            if (folder != null) {
+                libraryService.scanFolder(folder);
+            }
+        });
+
+        ProgressIndicator folderProgress = new ProgressIndicator();
+        folderProgress.setPrefSize(18, 18);
+        folderProgress.setMaxSize(18, 18);
+
+        folderProgress.visibleProperty().bind(
+                libraryService.folderScanningProperty()
+        );
+
+        folderProgress.managedProperty().bind(
+                folderProgress.visibleProperty()
+        );
+
+        Label folderStatusLabel = new Label();
+        folderStatusLabel.setWrapText(true);
+
+        folderStatusLabel.textProperty().bind(
+                libraryService.folderScanMessageProperty()
+        );
+
+        HBox.setHgrow(folderStatusLabel, Priority.ALWAYS);
+
+        Button cancelScanButton = new Button("Cancel scan");
+
+        cancelScanButton.visibleProperty().bind(
+                libraryService.folderScanningProperty()
+        );
+
+        cancelScanButton.managedProperty().bind(
+                cancelScanButton.visibleProperty()
+        );
+
+        cancelScanButton.setOnAction(
+                event -> libraryService.cancelFolderScan()
+        );
+
+        HBox folderStatusRow = new HBox(
+                8,
+                folderProgress,
+                folderStatusLabel,
+                cancelScanButton
+        );
 
         Runnable updateQueueButtons = () -> {
             previousButton.setDisable(!playbackQueue.hasPrevious());
@@ -414,6 +475,7 @@ public class MiSPlayApp extends Application {
                 10,
                 openButton,
                 addButton,
+                addFolderButton,
                 previousButton,
                 playButton,
                 pauseButton,
@@ -439,6 +501,7 @@ public class MiSPlayApp extends Application {
                 timeLabel,
                 seekSlider,
                 controls,
+                folderStatusRow,
                 playbackOptions,
                 volumeControls,
                 errorLabel

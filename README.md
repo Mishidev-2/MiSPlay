@@ -34,6 +34,7 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Session metadata caching: successful reads are reused when revisiting or repeating a track.
 - Virtualized library rows displaying cached song titles and artists.
 - Automatic background metadata loading.
+- Import MP3s from folders and subfolders using a cancellable background scan, with file counts and duplicate detection.
 
 ## Technology
 
@@ -92,7 +93,7 @@ Run the [manual playback checks](docs/DEVELOPMENT.md#manual-checks) before commi
 
 ## Next milestone
 
-- Background folder importing
+- Display embedded album artwork for the current song with bounded memory use.
 
 ## Planned features
 
