@@ -5,6 +5,7 @@ import javafx.beans.property.ReadOnlyObjectWrapper;
 
 import java.io.File;
 import java.util.Objects;
+import java.util.Locale;
 
 public final class Track {
     private final File file;
@@ -42,4 +43,19 @@ public final class Track {
         metadataLoaded = true;
         metadata.set(checkedValue);
     }
+
+    public boolean matchesSearch(String normalizedQuery) {
+        TrackMetadata values = getMetadata();
+
+        return normalizedQuery.isEmpty()
+                || file.getName().toLowerCase(Locale.ROOT)
+                .contains(normalizedQuery)
+                || values.title().toLowerCase(Locale.ROOT)
+                .contains(normalizedQuery)
+                || values.artist().toLowerCase(Locale.ROOT)
+                .contains(normalizedQuery)
+                || values.album().toLowerCase(Locale.ROOT)
+                .contains(normalizedQuery);
+    }
+
 }

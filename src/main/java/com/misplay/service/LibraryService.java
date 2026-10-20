@@ -1,6 +1,7 @@
 package com.misplay.service;
 
 import com.misplay.model.Track;
+import javafx.beans.Observable;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 
@@ -12,15 +13,17 @@ import java.util.List;
 import java.util.Map;
 
 public class LibraryService {
-    private final ObservableList<File> tracks =
-            FXCollections.observableArrayList();
+    private final ObservableList<Track> tracks =
+            FXCollections.observableArrayList(
+                    track -> new Observable[]{track.metadataProperty()}
+            );
 
-    private final ObservableList<File> readOnlyTracks =
+    private final ObservableList<Track> readOnlyTracks =
             FXCollections.unmodifiableObservableList(tracks);
 
     private final Map<Path, Track> tracksByPath = new HashMap<>();
 
-    public ObservableList<File> getTracks() {
+    public ObservableList<Track> getTracks() {
         return readOnlyTracks;
     }
 
@@ -38,20 +41,16 @@ public class LibraryService {
     }
 
     public void addFiles(List<File> files) {
-        List<File> additions = new ArrayList<>();
+        List<Track> additions = new ArrayList<>();
 
         for (File file : files) {
             Path path = file.toPath().toAbsolutePath().normalize();
 
             if (!tracksByPath.containsKey(path)) {
-                File normalizedFile = path.toFile();
+                Track track = new Track(path.toFile());
 
-                tracksByPath.put(
-                        path,
-                        new Track(normalizedFile)
-                );
-
-                additions.add(normalizedFile);
+                tracksByPath.put(path, track);
+                additions.add(track);
             }
         }
 

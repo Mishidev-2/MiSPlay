@@ -32,6 +32,9 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Track model containing a file, observable metadata and a metadata-loaded flag.
 - Session metadata caching that survives queue changes and duplicate imports.
 - Protection against stale metadata results when switching to an already cached track.
+- Library rows displaying cached song titles and artists.
+- Search across filenames, titles, artists and albums, including automatic filtering when metadata changes.
+- Binding cleanup when virtualized cells are reused.
 
 ### Verification
 

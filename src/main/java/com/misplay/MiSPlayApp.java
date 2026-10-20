@@ -7,10 +7,13 @@ import com.misplay.service.LibraryService;
 import com.misplay.model.TrackMetadata;
 import com.misplay.model.Track;
 import com.misplay.service.MetadataService;
-import javafx.concurrent.Task;
 
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import javafx.concurrent.Task;
+import javafx.beans.binding.StringBinding;
 
 import javafx.scene.Scene;
 import javafx.scene.layout.HBox;
@@ -189,10 +192,12 @@ public class MiSPlayApp extends Application {
                 new FileChooser.ExtensionFilter("MP3 audio", "*.mp3")
         );
 
-        FilteredList<File> filteredTracks =
-                new FilteredList<>(libraryService.getTracks(), file -> true);
+        FilteredList<Track> filteredTracks = new FilteredList<>(
+                libraryService.getTracks(),
+                track -> track.matchesSearch("")
+        );
 
-        ListView<File> songList = new ListView<>(filteredTracks);
+        ListView<Track> songList = new ListView<>(filteredTracks);
 
         Consumer<File> playFile = file -> {
             loadMetadata(file, trackLabel, metadataLabel);
@@ -201,7 +206,9 @@ public class MiSPlayApp extends Application {
             pauseButton.setDisable(false);
 
             // Highlight the playing file when it is visible.
-            int visibleIndex = filteredTracks.indexOf(file);
+            int visibleIndex = filteredTracks.indexOf(
+                    libraryService.getTrack(file)
+            );
 
             songList.getSelectionModel().clearSelection();
 
@@ -236,9 +243,15 @@ public class MiSPlayApp extends Application {
             playFile.accept(nextFile);
         });
 
-        Consumer<File> startQueue = file -> {
-            playbackQueue.start(filteredTracks, file);
-            playFile.accept(file);
+        Consumer<Track> startQueue = track -> {
+            List<File> queueFiles = new ArrayList<>();
+
+            for (Track visibleTrack : filteredTracks) {
+                queueFiles.add(visibleTrack.getFile());
+            }
+
+            playbackQueue.start(queueFiles, track.getFile());
+            playFile.accept(track.getFile());
         };
 
         openButton.setOnAction(event -> {
@@ -270,7 +283,10 @@ public class MiSPlayApp extends Application {
         });
 
         TextField searchField = new TextField();
-        searchField.setPromptText("Search filenames...");
+
+        searchField.setPromptText(
+                "Search filename, title, artist or album..."
+        );
 
         searchField.textProperty().addListener(
                 (observable, oldText, newText) -> {
@@ -278,11 +294,8 @@ public class MiSPlayApp extends Application {
                             ? ""
                             : newText.strip().toLowerCase(Locale.ROOT);
 
-                    filteredTracks.setPredicate(file ->
-                            query.isEmpty()
-                                    || file.getName()
-                                    .toLowerCase(Locale.ROOT)
-                                    .contains(query)
+                    filteredTracks.setPredicate(
+                            track -> track.matchesSearch(query)
                     );
                 }
         );
@@ -304,13 +317,39 @@ public class MiSPlayApp extends Application {
         songList.setMinHeight(120);
 
         songList.setCellFactory(listView -> {
-            ListCell<File> cell = new ListCell<>() {
-                @Override
-                protected void updateItem(File file, boolean empty) {
-                    super.updateItem(file, empty);
+            ListCell<Track> cell = new ListCell<>() {
+                private StringBinding rowText;
 
-                    setText(empty || file == null ? null : file.getName());
+                @Override
+                protected void updateItem(Track track, boolean empty) {
+                    super.updateItem(track, empty);
+
+                    textProperty().unbind();
+
+                    if (rowText != null) {
+                        rowText.dispose();
+                        rowText = null;
+                    }
+
                     setGraphic(null);
+
+                    if (empty || track == null) {
+                        setText(null);
+                        return;
+                    }
+
+                    rowText = Bindings.createStringBinding(
+                            () -> {
+                                TrackMetadata metadata = track.getMetadata();
+
+                                return metadata.title()
+                                        + " — "
+                                        + metadata.artist();
+                            },
+                            track.metadataProperty()
+                    );
+
+                    textProperty().bind(rowText);
                 }
             };
 
@@ -329,11 +368,11 @@ public class MiSPlayApp extends Application {
 
         songList.setOnKeyPressed(event -> {
             if (event.getCode() == KeyCode.ENTER) {
-                File selectedFile =
+                Track selectedTrack =
                         songList.getSelectionModel().getSelectedItem();
 
-                if (selectedFile != null) {
-                    startQueue.accept(selectedFile);
+                if (selectedTrack != null) {
+                    startQueue.accept(selectedTrack);
                 }
 
                 event.consume();

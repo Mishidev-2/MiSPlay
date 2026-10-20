@@ -17,8 +17,8 @@ The current checkpoint is local MP3 playback. Library scanning, metadata service
 | `RepeatMode` | Defines the available repeat choices: OFF, ALL and ONE. |
 | `MetadataService` | Reads title, artist and album tags and supplies fallbacks for missing fields. |
 | `TrackMetadata` | Immutable record containing the title, artist and album strings used for display. |
-| `LibraryService` | Maintains the imported file list and one Track per normalized path, preventing duplicates and preserving cached metadata. |
-| `Track` | Connects a file to observable metadata and records whether a successful metadata read has completed. |
+| `LibraryService` | Maintains an observable Track list, observes metadata changes and provides normalized-path lookup for deduplication and caching. |
+| `Track` | Connects a file to observable metadata, records loading state and matches normalized searches against filename and metadata fields. |
 ### Opening a track
 
 1. The user chooses an MP3 in the file chooser.
@@ -57,7 +57,9 @@ The setting lasts for the current application session. Each application launch s
 
 `PlaybackQueue` is a plain Java class containing the captured original order, the active playback order, a current index, a repeat mode and a shuffle flag.
 
-Starting playback from a song-list row captures the current visible results using `List.copyOf`. Later searches and imports do not change that queue. Activating another row creates a new queue. Open MP3 creates a single-song queue.
+Activating a row passes its Track to `startQueue`. That action converts the current filtered entries into a `List<File>` and passes it, together with the selected file, to `PlaybackQueue.start`.
+
+The queue captures that file order using `List.copyOf`. Later metadata changes, searches and imports leave the active queue intact. Activating another row creates a new queue. Open MP3 creates a single-song queue.
 
 The shared `playFile` action starts a file and updates the playback display, visible selection and navigation buttons. Manual Previous and Next start the selected track even when playback was paused.
 
@@ -119,37 +121,33 @@ The completion callback remains registered when individual players are replaced.
 
 ### Song list
 
-`LibraryService` stores songs in an `ObservableList<File>`. Its public getter returns an unmodifiable observable view, allowing the UI to observe changes while additions go through the service.
+`LibraryService.getTracks()` exposes an unmodifiable `ObservableList<Track>`. A normalized-path map preserves one Track object per imported file.
 
-Imported paths are converted to normalized absolute paths. A `HashSet<Path>` prevents repeated imports of the same path. Files with identical filenames in different directories remain separate entries.
+The source list uses an extractor that observes each track's `metadataProperty()`. Metadata changes therefore produce list-update events.
 
-New files are collected and added in one batch using `addAll()`.
+A `ListView<Track>` displays filtered entries using reusable cells with a fixed height of 32 pixels.
 
-`MiSPlayApp` displays the collection in a `ListView<File>` with a fixed cell height of 32. Reusable cells display filenames and clear their contents when empty. Cell updates perform no metadata parsing, artwork loading or audio loading.
+Each populated cell binds its text to the track's metadata and displays title — artist. Before metadata loads, this uses filename and Unknown artist fallbacks.
 
-Open MP3 adds the selected file and starts a single-song queue. Add MP3s imports files without changing playback or the active queue. Double-clicking a populated row or pressing Enter on a selected row invokes `startQueue`, which captures the visible results and delegates playback to `playFile`.
+When a cell is reused, `updateItem` unbinds its text, disposes its previous binding and clears empty-cell content before connecting to another track. Rendering uses in-memory values.
 
-The double-click handler reads the cell's current item when clicked, ensuring recycled cells play the file they currently display.
+Double-clicking a populated row or pressing Enter on a selected row invokes `startQueue` with its Track.
 
-The collection exists only for the current application session and starts empty on the next launch.
+Open MP3 imports the selected file and starts a single-song queue. Add MP3s imports entries without changing playback or the active queue.
 
+### Library search
 
+The search-field listener strips surrounding whitespace and converts the query to lowercase using `Locale.ROOT`.
 
-### Filename search
+`Track.matchesSearch` checks the filename and cached title, artist and album using the same lowercase convention. Matching uses substring searches. Empty and whitespace-only queries include all tracks.
 
-`MiSPlayApp` wraps the library's complete collection in a `FilteredList<File>` and supplies that filtered view to the song list.
+The library's extractor reports metadata changes to the FilteredList. A track can therefore enter or leave the current results without the user editing the query again.
 
-Changes to the search field update the filter predicate. Queries have surrounding whitespace removed and are converted to lowercase using `Locale.ROOT`. Matching checks whether the lowercase filename contains the query. Empty or whitespace-only queries show every file.
+For example, a track matching Unknown artist can leave those results after its embedded artist loads. An artist search can gain a matching entry when its metadata becomes available.
 
-Filtering controls which rows are visible while preserving the complete library collection. Playback continues independently, including when the playing file is hidden by the search.
+Filtering uses in-memory values. Metadata currently loads during playback, so unplayed tracks cannot match embedded fields that have not been read yet.
 
-Row activation uses the `File` associated with the current result, ensuring double-click and Enter play the displayed file.
-
-New imports automatically pass through the active filter. Duplicate prevention still checks the complete collection, including hidden files.
-
-The placeholder shows an import instruction when the library is empty and a no-results message when a populated library has no matching files.
-
-Filtering runs in JavaFX text-change handlers and examines filenames already in memory.
+Changes to search results do not modify the captured playback queue or interrupt playback.  
 
 ### Playback queue
 
@@ -183,7 +181,7 @@ The filename appears immediately while metadata loads. Successful reads replace 
 
 Read failures retain the filename, show a metadata-unavailable message and log the exception independently of audio errors.
 
-The song list and search currently use filenames. Successful now-playing metadata reads are stored on the file's Track model and reused during the current session.
+Library rows and search use cached metadata from Track objects. Successful now-playing reads update the model, which notifies the row bindings and filtered library.
 
 Known issue: Yaezakura displays a shortened artist/details line even though Windows Properties lists artist and album information. The cause remains undiagnosed and investigation is deferred.
 
@@ -309,6 +307,15 @@ Unless a check specifies otherwise, start it with Repeat OFF and Shuffle OFF.
 | M84 | Start another queue containing previously cached tracks. | Cached metadata remains available across queue changes. |
 | M85 | Exercise navigation, filename search, volume, seeking, repeat and shuffle. | Existing playback and library behavior continues working. |
 | M86 | Restart the application, reimport a previously cached file and play it. | Metadata is read again in the new session. |
+| M87 | Import unplayed tracks in a fresh session. | Rows initially display filename — Unknown artist. |
+| M88 | Play a tagged song. | Its row updates to the embedded title and artist. |
+| M89 | Search a cached track by filename, title, artist and album. | Each field matches; case differences, surrounding whitespace and clearing the query work. |
+| M90 | Keep an artist query active and open an uncached song by that artist. | Its row appears after metadata loads without editing the query. |
+| M91 | Search Unknown artist and activate an uncached song with an embedded artist. | Its row leaves the results after loading; playback continues. |
+| M92 | Double-click and press Enter on filtered rows. | The correct files play. |
+| M93 | Start a multi-song queue, then change search results or import files. | Navigation and automatic advancement retain the captured file order. |
+| M94 | Scroll and resize repeatedly. | Reused cells show the correct content and empty cells contain no leftover text. |
+| M95 | Exercise shuffle, repeat, volume and seeking. | Existing playback behavior continues working. |
 
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 

@@ -20,7 +20,7 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Add multiple MP3s without changing playback.
 - Play a song by double-clicking its row or pressing Enter.
 - Prevent duplicate imports using normalized absolute file paths.
-- Live, case-insensitive filename search that ignores surrounding query whitespace.
+- Search by filename and cached title, artist or album, with automatic result updates when metadata loads.
 - Search results update as files are imported, while current playback continues.
 - Manual Previous/Next navigation through a queue captured from the visible song list.
 - Queue order stays stable during searches and imports.
@@ -32,6 +32,7 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Now-playing title, artist and album read from MP3 tags using a background worker.
 - Filename and Unknown artist/album fallbacks for missing metadata.
 - Session metadata caching: successful reads are reused when revisiting or repeating a track.
+- Virtualized library rows displaying cached song titles and artists.
 ## Technology
 
 | Component | Current choice |
@@ -89,7 +90,7 @@ Run the [manual playback checks](docs/DEVELOPMENT.md#manual-checks) before commi
 
 ## Next milestone
 
-- Display and search cached title, artist and album metadata in the song library.
+- Load metadata for all imported tracks in the background without requiring playback.
 
 ## Planned features
 
@@ -107,7 +108,7 @@ The future Python LRC generator is a separate project. AI models are not part of
 
 ## Known limitations
 
-- The song list and search currently use filenames.
+- Metadata currently loads when a track is played. Unplayed tracks use fallback values until their metadata loads.
 - The now-playing artist display uses the first stored artist value.
 - One test song, Yaezakura by HoyoMix, displays a shortened artist/details line. The cause has not yet been diagnosed.
 - Cached metadata lasts for the current session and does not yet refresh automatically after file edits.
