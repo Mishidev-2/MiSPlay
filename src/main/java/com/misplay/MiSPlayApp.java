@@ -1,6 +1,7 @@
 package com.misplay;
 
 import com.misplay.model.PlaybackQueue;
+import com.misplay.model.PlaybackPreferences;
 import com.misplay.service.AudioService;
 import com.misplay.service.ArtworkService;
 import com.misplay.model.RepeatMode;
@@ -41,6 +42,7 @@ import java.util.Locale;
 import javafx.collections.transformation.FilteredList;
 
 import javafx.application.Application;
+import javafx.animation.PauseTransition;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -59,6 +61,10 @@ public class MiSPlayApp extends Application {
 
     private AudioService audioService;
     private boolean updatingSeekSlider;
+    private boolean applyingPlaybackPreferences;
+    private boolean stopping;
+    private final PauseTransition preferencesSaveDelay =
+            new PauseTransition(Duration.millis(250));
     private final LibraryService libraryService = new LibraryService();
     private final PlaybackQueue playbackQueue = new PlaybackQueue();
     private final ArtworkService artworkService = new ArtworkService();
@@ -87,6 +93,8 @@ public class MiSPlayApp extends Application {
 
         openButton.disableProperty().bind(libraryService.restoringLibraryProperty());
         addButton.disableProperty().bind(libraryService.restoringLibraryProperty());
+        repeatButton.disableProperty().bind(libraryService.restoringLibraryProperty());
+        shuffleButton.disableProperty().bind(libraryService.restoringLibraryProperty());
 
         Button addFolderButton = new Button("Add Folder");
 
@@ -200,6 +208,7 @@ public class MiSPlayApp extends Application {
         shuffleButton.setOnAction(event -> {
             playbackQueue.setShuffleEnabled(shuffleButton.isSelected());
             updateQueueButtons.run();
+            requestPlaybackPreferencesSave();
         });
 
         repeatButton.setOnAction(event -> {
@@ -211,6 +220,7 @@ public class MiSPlayApp extends Application {
 
             playbackQueue.setRepeatMode(mode);
             updateQueueButtons.run();
+            requestPlaybackPreferencesSave();
         });
 
         playButton.setDisable(true);
@@ -492,6 +502,7 @@ public class MiSPlayApp extends Application {
                 audioService.getVolume() * 100
         );
         volumeSlider.setPrefWidth(220);
+        volumeSlider.disableProperty().bind(libraryService.restoringLibraryProperty());
 
         Label volumeValue = new Label(
                 Math.round(volumeSlider.getValue()) + "%"
@@ -504,6 +515,30 @@ public class MiSPlayApp extends Application {
 
                     audioService.setVolume(percentage / 100.0);
                     volumeValue.setText(Math.round(percentage) + "%");
+                    requestPlaybackPreferencesSave();
+                }
+        );
+
+        preferencesSaveDelay.setOnFinished(event -> savePlaybackPreferences());
+
+        libraryService.restoringLibraryProperty().addListener(
+                (observable, wasRestoring, isRestoring) -> {
+                    if (isRestoring || stopping) {
+                        return;
+                    }
+
+                    PlaybackPreferences preferences = libraryService.getPlaybackPreferences();
+                    applyingPlaybackPreferences = true;
+
+                    try {
+                        audioService.setVolume(preferences.volume());
+                        volumeSlider.setValue(preferences.volume() * 100.0);
+                        playbackQueue.setRepeatMode(preferences.repeatMode());
+                        playbackQueue.setShuffleEnabled(preferences.shuffleEnabled());
+                        updateQueueButtons.run();
+                    } finally {
+                        applyingPlaybackPreferences = false;
+                    }
                 }
         );
 
@@ -598,6 +633,23 @@ public class MiSPlayApp extends Application {
         stage.setScene(new Scene(root, 760, 640));
         stage.show();
         libraryService.restoreLibrary();
+    }
+
+    private void requestPlaybackPreferencesSave() {
+        if (!applyingPlaybackPreferences && !stopping
+                && !libraryService.restoringLibraryProperty().get()) {
+            preferencesSaveDelay.playFromStart();
+        }
+    }
+
+    private void savePlaybackPreferences() {
+        if (audioService != null && !applyingPlaybackPreferences && !stopping
+                && !libraryService.restoringLibraryProperty().get()) {
+            libraryService.setPlaybackPreferences(new PlaybackPreferences(
+                    audioService.getVolume(), playbackQueue.getRepeatMode(),
+                    playbackQueue.isShuffleEnabled()
+            ));
+        }
     }
 
     private void loadMetadata(
@@ -699,6 +751,11 @@ public class MiSPlayApp extends Application {
 
     @Override
     public void stop() {
+        preferencesSaveDelay.stop();
+        // Capture a change made less than 250 ms before closing.
+        savePlaybackPreferences();
+        stopping = true;
+
         if (titleBinding != null) {
             titleBinding.dispose();
         }

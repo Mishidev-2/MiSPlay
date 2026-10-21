@@ -4,16 +4,16 @@
 
 MiSPlay is a personal Windows 11 desktop project developed in small, working increments. Each increment should have a clear behavior to verify. Keep the architecture understandable and add dependencies when a feature needs them.
 
-The current checkpoint includes MP3 playback, captured queues with repeat/shuffle, saved library paths/order and text metadata, background cache validation, folder importing and embedded album artwork. SQLite schema 2 caches title, artist and album with file size/modification time. Saved playback preferences are the next proposed checkpoint. Lyrics, tray/overlay behavior, updates and Windows packaging remain future work.
+The current checkpoint includes MP3 playback, captured queues with repeat/shuffle, saved library paths/order and text metadata, saved playback preferences, background cache validation, folder importing and embedded album artwork. SQLite schema 3 retains cached tags and stores volume, repeat mode and the shuffle switch. Manual playlists are the next proposed checkpoint. Favorites, lyrics, tray/overlay behavior, updates and Windows packaging remain future work.
 
 ## Current architecture
 
 | Class | Owns | Does not own |
 | --- | --- | --- |
-| `MiSPlayApp` | Controls, bindings, file/folder choosers, playback actions, service instances and shutdown coordination | Audio decoding, tag parsing or database storage |
+| `MiSPlayApp` | Controls, bindings, choosers, playback actions, delayed preference saves, startup guards and shutdown coordination | Audio decoding, tag parsing or SQL execution |
 | `AudioService` | The current `MediaPlayer`, playback/seek/volume requests, callbacks, audio errors and disposal | Library imports, UI controls or metadata/artwork caching |
-| `LibraryService` | Observable tracks, normalized-path lookup, metadata validation/cache, metadata/folder workers, restore/save scheduling and storage status | Audio playback, artwork caching or SQL execution |
-| `LibraryRepository` | Database location/schema/migration, ordered paths/cached tags and transactional path/cache writes | JavaFX models/controls, worker scheduling, tag parsing or audio bytes |
+| `LibraryService` | Observable tracks, metadata validation/cache, workers, current/active/pending preferences, restore/save scheduling and storage status | Audio playback, artwork caching or SQL execution |
+| `LibraryRepository` | Database schema/migration, consistent library/settings snapshots and transactional path/cache/preference writes | JavaFX controls, worker scheduling, tag parsing or audio bytes |
 | `Track` | A file, observable metadata/status and normalized search matching | File reading, worker scheduling or controls |
 | `TrackMetadata` | Immutable title, artist and album strings | Parser objects, artwork or loading state |
 | `MetadataStatus` | PENDING, LOADING, LOADED and FAILED states | Worker execution or persistence |
@@ -22,17 +22,18 @@ The current checkpoint includes MP3 playback, captured queues with repeat/shuffl
 | `FolderScanResult` | An unmodifiable copy of discovered files and a skipped-entry count | Scan execution or library changes |
 | `ArtworkService` | Selected-song artwork properties, its worker, latest waiting request and bounded thumbnail cache | Audio playback, library metadata reads or remote-image fetching |
 | `PlaybackQueue` | Captured original/active orders, position, navigation, repeat and shuffle rules | Controls, audio resources or file reading |
+| `PlaybackPreferences` | Immutable volume, repeat mode and shuffle choices, validation and defaults | Queue membership/order, playback position, controls or SQL |
 | `RepeatMode` | OFF, ALL and ONE choices | Queue navigation or playback execution |
 
-`LibraryRepository` also declares two nested transfer records: `CachedMetadata` contains a `TrackMetadata`, file size and modification-time string; `SavedTrack` contains a file and optional cache. A null cache represents a cache miss when loading or a request to clear cached fields when saving.
+`LibraryRepository` also declares three nested transfer records: `CachedMetadata` contains tag strings and file attributes, `SavedTrack` contains a file and optional cache, and `LibraryState` contains copied track entries plus preferences loaded together. A null cache represents a cache miss when loading or a request to clear cached fields when saving.
 
 ### Startup and saved library
 
-`MiSPlayApp` shows the window, then calls `LibraryService.restoreLibrary()` once. Loading runs on a dedicated database worker. Open MP3, Add MP3s and Add Folder stay disabled until restoration finishes; the list placeholder and storage row show loading status.
+`MiSPlayApp` shows the window, then calls `LibraryService.restoreLibrary()` once. Loading runs on a dedicated database worker. Open MP3, Add MP3s, Add Folder, volume, repeat and shuffle controls stay disabled until restoration finishes; the list placeholder and storage row show loading status.
 
 `LibraryRepository.defaultDatabasePath()` uses `%LOCALAPPDATA%\MiSPlay\library.db`, falling back to `.misplay/library.db` under Java's `user.home` when `LOCALAPPDATA` is missing or blank. Its constructor normalizes the path without touching the disk. Opening a connection creates the parent directory and database when needed. No separate SQLite server or `module-info.java` is required; Maven supplies `sqlite-jdbc` 3.53.4.0 and runtime `slf4j-nop` 1.7.36. The launcher's native-access option includes `ALL-UNNAMED` for the JDBC dependency.
 
-Schema version 2 is recorded with `PRAGMA user_version`. Startup upgrades schema 1 transactionally by adding six nullable columns without replacing saved paths or IDs. A new database is initialized through the same path. The resulting table is:
+Schema version 3 is recorded with `PRAGMA user_version`. Startup upgrades earlier schemas transactionally: schemas 0/1 receive cached-tag columns, and schema 2 retains those columns/data while gaining a preferences table. Saved paths, IDs and insertion order are not replaced. The track table remains:
 
 ```sql
 CREATE TABLE IF NOT EXISTS library_tracks (
@@ -47,11 +48,11 @@ CREATE TABLE IF NOT EXISTS library_tracks (
 );
 ```
 
-Metadata-cache format version 1 is separate from database schema version 2. Bump the cache-format constant when tag interpretation or fallback rules change, so older results become misses. Missing fields, negative sizes and unsupported cache-format versions are treated as uncached metadata rather than rejecting the saved paths.
+Metadata-cache format version 1 is separate from database schema version 3. Bump the cache-format constant when tag interpretation or fallback rules change, so older results become misses. Missing fields, negative sizes and unsupported cache-format versions are treated as uncached metadata rather than rejecting the saved paths.
 
-Loading reads paths/caches with `ORDER BY id`, validates that each path is absolute and returns normalized files. The repository does not check file existence or start playback. On the JavaFX thread, `LibraryService` registers restored files as new Track models and schedules background cache checks without inserting those paths again. The original insertion order becomes the library order; filesystem traversal order is not guaranteed for a newly imported folder.
+`loadState()` reads paths/caches with `ORDER BY id` and the preferences row in one read transaction. It validates absolute paths and returns normalized files without checking existence or starting playback. On the JavaFX thread, `LibraryService` assigns preferences, registers Tracks and schedules background cache checks without reinserting paths. Preferences are assigned before `restoringLibrary` becomes false. The app applies them to audio/queue/controls under a guard suppressing save requests. The original insertion order becomes the library order; filesystem traversal order is not guaranteed for a newly imported folder.
 
-An initial restore/migration failure disables saving for that launch, displays a status message and still enables temporary imports/playback. An unreadable/corrupt database or a schema version above 2 is not silently reset or replaced. The user must fix the storage problem and restart to retry restoration. Missing paths remain saved even if metadata or audio loading fails. Keep a database backup before upgrading; schema-1 application code cannot open schema 2.
+An initial restore/migration failure disables saving for that launch, displays a status message and enables temporary imports/playback/settings after loading finishes. An unreadable/corrupt database or schema version above 3 is not silently reset or replaced. Fix the storage problem and restart to retry restoration. Missing paths remain saved even if metadata or audio loading fails. Keep a database backup before upgrading; earlier application code cannot open schema 3.
 
 ### Saving imported paths
 
@@ -59,18 +60,18 @@ After restoration, `addFiles` registers new normalized paths on the JavaFX threa
 
 One database task runs at a time. An insertion-ordered pending set coalesces new paths while a batch is active. A pending metadata map retains the latest result or clear request for each path. Tag results can coalesce until 32 pending changes or the end of the metadata queue; imports, save completion and normal close can also flush smaller batches.
 
-The repository opens/closes a connection per operation and uses a three-second SQLite busy timeout. `saveChanges` inserts new paths with prepared parameters and `ON CONFLICT(path) DO NOTHING`, then updates cached columns by path in the same transaction. Cache updates never reorder existing paths. SQL failures or an update for an unknown path roll back the whole batch. Library membership remains append-only; there is no removal or full-library snapshot replacement.
+The repository opens/closes a connection per operation and uses a three-second SQLite busy timeout. `saveChanges` inserts paths with prepared parameters and `ON CONFLICT(path) DO NOTHING`, updates cached columns and optionally upserts preferences in one transaction. Null preferences leave existing settings unchanged. Cache/settings updates never reorder paths. SQL failures or an update for an unknown path roll back the whole batch. Library membership remains append-only; there is no removal or full-library snapshot replacement.
 
-The storage row shows restoration/saving activity. A failed write restores its paths and metadata changes to pending state, sets the save-failed property and pauses automatic writes. New imports/results can still join the pending work. When an older failed cache write and a newer waiting result share a path, the newer value wins. Retry save clears the failure state and attempts pending changes again. Import, search and playback continue while saves run.
+The storage row shows restoration/saving activity. A failed write restores paths, metadata changes and settings to pending state, sets the save-failed property and pauses automatic writes. New imports/results/settings can still join pending work. Newer waiting metadata/preferences win over older failed snapshots. Retry save clears the failure state and attempts pending changes again. Import, search and playback continue while saves run.
 
-Paths, insertion order and valid title/artist/album caches persist. Loading status, artwork, queue position/order and playback settings are rebuilt or reset each launch. Normal close attempts to finish accepted writes; forced termination or an unresolved database failure can leave paths/cache updates unsaved.
+Paths, insertion order, valid title/artist/album caches and playback preferences persist. Loading status, artwork and active queue/song/position/order are rebuilt or reset each launch. Normal close attempts to finish accepted writes; forced termination or an unresolved storage error can leave paths/cache/settings updates unsaved.
 
 ### Opening a track
 
 1. Open MP3 shows a file chooser. Cancelling leaves the library and playback unchanged.
 2. After restoration has finished, the selected file is imported through `LibraryService.addFiles`, preserving an existing Track for a known path. A new path queues metadata and a database save when persistence is available. `PlaybackQueue.start` creates a single-song queue.
 3. The shared `playFile` action binds the now-playing metadata labels, calls `ArtworkService.showArtwork`, clears the previous audio error and updates playback controls and the visible list selection.
-4. `AudioService.loadAndPlay` disposes of the previous player, creates `Media` from the file URI and creates a replacement `MediaPlayer` with its callbacks attached. The player receives the stored volume, which defaults to 0.5 (50%) at launch.
+4. `AudioService.loadAndPlay` disposes of the previous player, creates `Media` from the file URI and creates a replacement `MediaPlayer` with its callbacks attached. The player receives the current restored or edited volume; 0.5 (50%) is the fallback when no valid saved volume exists.
 5. Playback is requested. JavaFX completes media preparation asynchronously; metadata and artwork can finish independently.
 
 Row activation, manual navigation and automatic advancement also use `playFile`. When the current song is visible in the filtered list, it is selected and scrolled into view.
@@ -87,10 +88,11 @@ Synchronous construction failures are caught by `loadAndPlay`. Later media/playe
 
 - `AudioService` holds at most one active player and disposes of the previous player before replacing it.
 - Disposal clears the service's player reference before releasing audio resources.
-- `LibraryService` owns the current launch's Track objects, path lookup, metadata/scanning workers, database worker and pending save batches.
+- `LibraryService` owns the current launch's Track objects, path lookup, metadata/scanning/database workers and active/pending save snapshots, including preferences.
 - `LibraryRepository` owns blocking SQL operations; each operation closes its statements and connection and runs on the database worker.
 - `ArtworkService` owns the artwork worker and thumbnail cache; Track metadata remains strings only.
-- `Application.stop()` disposes of now-playing bindings, closes artwork/library services and disposes of the audio player.
+- `MiSPlayApp` owns the preference save delay and restoration/shutdown guards. Its stop method captures the latest settings before closing the library service.
+- `Application.stop()` also disposes of now-playing bindings, closes artwork/library services and disposes of the audio player.
 - Use file URIs for `Media`; do not construct media locations by manually concatenating Windows path separators.
 
 ### Volume control
@@ -101,7 +103,32 @@ Synchronous construction failures are caught by `loadAndPlay`. Later media/playe
 
 Every replacement player receives the stored volume. Volume can also be adjusted before opening a track.
 
-The setting lasts for the current application session. Each application launch starts at 50%.
+Startup restores a valid saved volume before controls become available. Without a valid saved choice, volume uses 50%. A saved 0% remains muted rather than being mistaken for a missing value.
+
+### Playback preferences
+
+`PlaybackPreferences` is an immutable record containing volume from 0.0 to 1.0, a non-null `RepeatMode` and a shuffle flag. Its defaults are 0.5, OFF and false. Invalid caller volume (including NaN/infinity) and a null repeat mode are rejected.
+
+Schema 3 adds this singleton table:
+
+```sql
+CREATE TABLE playback_preferences (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    volume REAL NOT NULL,
+    repeat_mode TEXT NOT NULL,
+    shuffle_enabled INTEGER NOT NULL
+);
+```
+
+An absent row uses defaults without inserting one. Invalid stored volume/mode/shuffle values fall back per field, retaining other valid choices. Loading and applying defaults never automatically rewrite the row. Actual edits save a complete validated snapshot with a parameterized `ON CONFLICT(id) DO UPDATE`.
+
+`LibraryService.getPlaybackPreferences()` exposes the current immutable choices. Its setter is guarded while restoring, ignores unchanged snapshots and retains session-only choices if persistence is disabled. Active and pending snapshots are separate so newer waiting choices survive an older write failure.
+
+Volume/repeat/shuffle handlers update runtime audio/queue state immediately, then restart a 250 ms `PauseTransition`. When it finishes, `MiSPlayApp` captures the latest choices for background saving. Applying restored controls suppresses save requests. Timing follows JavaFX pulse scheduling; no SQL runs in the animation callback.
+
+Normal close stops the delay and captures any last change before setting the shutdown guard and closing services. Closing during startup skips this capture, so temporary defaults cannot overwrite saved choices. The shutdown guard also prevents a late restoration-state change from applying controls after stop.
+
+Only volume, repeat mode and the shuffle switch are saved. Queue membership, selected song, playback position and the particular shuffled order remain session-only. A fresh queue can generate a new order with the saved switch ON. Preference restoration leaves the queue empty and playback stopped.
 
 ### Playback queue
 
@@ -113,7 +140,7 @@ The queue captures its file order using `List.copyOf`. Later metadata changes, s
 
 The shared `playFile` action updates metadata/artwork, audio playback, visible selection and navigation buttons. Previous/Next use the active queue without rebuilding it and start the selected song even if playback was paused. Volume carries over.
 
-Repeat defaults to OFF:
+Without a valid saved choice, repeat defaults to OFF. Otherwise startup restores the saved mode. Its behavior is:
 
 | Mode | Natural completion | Manual Previous and Next |
 | --- | --- | --- |
@@ -123,11 +150,11 @@ Repeat defaults to OFF:
 
 Previous and Next are disabled for empty and single-song queues in every mode. A single song can still repeat automatically in ALL or ONE.
 
-Changing repeat mode updates the controls without starting, pausing or restarting playback. Starting another queue preserves the repeat choice, which resets to OFF after restarting the application.
+Changing repeat mode updates the controls without starting, pausing or restarting playback. Starting another queue preserves the choice; later launches restore the saved mode.
 
 ### Shuffle playback
 
-Shuffle defaults to OFF and is controlled through a JavaFX `ToggleButton`.
+Without a valid saved choice, shuffle defaults to OFF. Its switch is restored at startup and controlled through a JavaFX `ToggleButton`.
 
 `originalTracks` stores the file order captured when the queue starts. `tracks` stores the active playback order. Both lists contain file references rather than loaded audio.
 
@@ -143,7 +170,7 @@ Disabling shuffle restores `originalTracks` and finds the current song's positio
 
 Toggling shuffle updates queue state and controls without reloading audio, preserving playback position and paused state.
 
-Searches and imports do not change the active queue. Starting another queue preserves the shuffle setting, which resets to OFF when the application restarts.
+Searches and imports do not change the active queue. Starting another queue preserves the shuffle switch; later launches restore that switch without restoring the earlier queue/order.
 
 ### Seeking
 
@@ -268,27 +295,28 @@ JavaFX controls, observable library collections, Track properties, playback queu
 | Metadata | `LibraryService` | One `Task<MetadataReadResult>` validates attributes and reuses cached strings or calls `MetadataService`. | Update that Track/cache/status, queue fresh/cleared metadata for saving and start the next check. |
 | Folder scan | `LibraryService` | One `FolderScanTask` traverses folders and collects paths/counts. | Import a successful result or display cancellation/failure without adding partial results. |
 | Artwork | `ArtworkService` | One `Task<Image>` reads, resizes and copies an embedded cover. | Update the bounded cache and display only a result for the selected path. |
-| Database | `LibraryService` schedules `LibraryRepository` | One worker serializes migration, path/cache loading and transactional inserts/updates. | Register restored Tracks/cache candidates, update storage status and schedule the next save. |
+| Database | `LibraryService` schedules `LibraryRepository` | One worker serializes migration, library/settings loading and transactional path/cache/preference writes. | Assign preferences before unlocking controls, register Tracks/cache candidates and update save state. |
+| Preference delay | `MiSPlayApp` | None; a 250 ms `PauseTransition` runs on the JavaFX thread. | Capture the latest choices and enqueue an immutable save snapshot. |
 
-These operations use separate single-thread executors. Background tasks return data without manipulating live controls or the observable library.
+Metadata, folder scanning, artwork and database work use separate single-thread executors. The preference delay runs on the JavaFX thread and schedules SQL on the database worker. Background tasks return data without manipulating live controls or the observable library.
 
 Metadata priority changes the waiting deque without interrupting its current read. Artwork selection replaces its single waiting request without interrupting its current read. Result handlers check that the owning service remains open and their task is still active.
 
 ### Application shutdown
 
-`MiSPlayApp.stop()` disposes of the now-playing bindings, closes `ArtworkService`, closes `LibraryService` and disposes of `AudioService`.
+`MiSPlayApp.stop()` stops the preference delay, captures the latest choices when restoration has finished, sets its shutdown guard, disposes of now-playing bindings, closes `ArtworkService`, closes `LibraryService` and disposes of `AudioService`.
 
 Artwork closing clears its current-task reference, waiting path and cache, requests cancellation of the active task and shuts down its executor. Library closing clears waiting metadata, clears task references, requests cancellation of active metadata/scanning tasks, unbinds folder status and shuts down those two executors.
 
 Metadata, scanner and artwork workers are daemon threads. Cancellation is a request; closed/task-identity checks prevent late completions from updating the UI, including a database restore completing after close.
 
-The database worker is deliberately non-daemon. Closing does not cancel accepted database tasks. When persistence is enabled, it queues a final save containing active/waiting paths and completed metadata changes, keeping the newest pending cache value per path, then calls `shutdown()` so the worker drains before JVM exit. Repeated path inserts are harmless because paths are unique. This final attempt also includes changes from a failed save; a further failure is logged and is not claimed as saved. Unfinished/cancelled metadata reads are not promised to be cached; saved paths can be read on the next launch. Shutdown does not wait on the JavaFX thread. A locked database can delay exit until its background timeout; a forced stop bypasses normal draining.
+The database worker is deliberately non-daemon. Closing does not cancel accepted database tasks. When persistence is enabled, a final save includes active/waiting paths, completed metadata changes and the newest pending preferences. `shutdown()` lets the worker drain before JVM exit. Repeated path inserts and preference upserts are harmless. Failed-save changes are included; another failure is logged and is not claimed as saved. Unfinished/cancelled metadata reads can be rebuilt from saved paths next launch. Shutdown does not wait on the JavaFX thread. A lock can delay exit until its background timeout; forced termination bypasses normal draining.
 
 ## Verification status
 
 The developer has reported working playback/library metadata, folder importing, embedded artwork and SQLite library-path checkpoints. Per-ID Windows results for the complete checklist below have not been recorded; the rows describe checks to run, not a blanket pass claim.
 
-The current application was reported working after the metadata-cache handoff. Individual migration/cache scenarios have not been recorded as Windows passes.
+The current application was reported working after the metadata-cache handoff. The developer also reported the playback-preferences checkpoint working after installation. Detailed per-scenario Windows results have not been recorded.
 
 Development-time headless artwork checks used generated MP3 fixtures and covered JPEG/PNG resizing, Unicode filenames, cache reuse and eviction, missing/damaged covers, invalid-file recovery, rapid selection changes, obsolete-result handling and shutdown. A separate layout check used substitutes for the existing services. These checks do not establish a full build or audio regression result for the Windows project.
 
@@ -296,7 +324,11 @@ SQLite development checks used the real 3.53.4.0 driver. Twelve repository check
 
 The metadata-cache checkpoint added 30 focused checks: migration/rollback and retained IDs/order, Unicode/quotes, invalid cache data/version, atomic path/cache writes, restart cache hits verified through parser-call counts, time-only and size-only invalidation, submillisecond timestamps, playback/reimport refresh, missing/repaired files, bounded reads during concurrent edits, database locks, newest-result retry/close behavior, fallback caching and an 80-track batch. Those 30 and the existing 40 repository/library/UI checks passed together.
 
+The preferences checkpoint passed a separate set of 70 checks: 35 model/repository checks, 16 settings/cache-coordination checks and 19 application checks. They covered schema 0/1/2 upgrades, retained caches, every repeat/shuffle combination, zero/full/decimal volume, malformed values, singleton-row enforcement, atomic rollback, startup gating, coalesced snapshots, first explicit playback volume, retry, immediate-close capture and failed-startup session use.
+
 Those persistence checks ran with JDK 17 and JavaFX 21.0.1. Production repository, LibraryService and application code were exercised with API substitutes for unchanged model/audio/metadata/folder components where full source was unavailable. They are separate development harnesses, not a committed test suite or proof of the complete Java 25/JavaFX 25.0.2 Windows application. Local Windows playback verification remains necessary for later changes.
+
+For the preferences checks, all four changed/new classes and the existing ArtworkService compiled. The audio spy recorded requests and volume without decoding MP3s; the queue fixture did not verify the production shuffle algorithm. Those behaviors still depend on local checks with the complete project.
 
 No committed automated project test suite or memory/CPU profiling baseline has been recorded. The Yaezakura metadata display issue remains unresolved.
 
@@ -304,14 +336,14 @@ No committed automated project test suite or memory/CPU profiling baseline has b
 
 Use MP3 files outside the Git repository. A small set of known working files is sufficient. Record actual results; these rows are a checklist, not a claim that every case has passed.
 
-Unless a check specifies otherwise, start it with Repeat OFF and Shuffle OFF. Some pending-state/cancellation checks need a sufficiently large batch; if work finishes before the action can be exercised, record the check as not exercised rather than passed.
+Unless a check specifies otherwise, set Repeat OFF and Shuffle OFF after restoration; those choices now persist. Use a disposable fresh profile when a check requires unsaved defaults. Some pending-state/cancellation checks need a sufficiently large batch; if work finishes too quickly, record the check as not exercised rather than passed.
 
 Wait for restoration before using import controls. Run storage fault/schema checks only against a disposable database in a test copy or a harness using `LibraryService(Path)`; keep the real saved library intact.
 
 | ID | Action | Expected result |
 | --- | --- | --- |
 | M01 | Launch with `javafx:run` | MiSPlay opens; Play and Pause start disabled |
-| M02 | Open a known working MP3 | Audio starts at the current volume, initially 50%; cached metadata appears immediately or fallback text updates after its read. |
+| M02 | Open a known working MP3 | Audio starts at the restored/edited volume, using 50% only without a valid saved value; cached or freshly read metadata appears. |
 | M03 | Pause during playback | Audio pauses without closing the application |
 | M04 | Play after pausing | Playback resumes from the paused position |
 | M05 | Open a second MP3 while the first plays | The first track stops and only the second track is heard |
@@ -325,7 +357,7 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M13 | Adjust volume during playback, including 0% | Volume changes immediately; 0% silences the audio |
 | M14 | Set volume to 20%, then open another MP3 | The replacement track uses the stored volume and the slider remains at 20% |
 | M15 | Pause, change volume, then resume | Playback resumes using the new volume |
-| M16 | Close and reopen MiSPlay | Volume starts at the default 50% |
+| M16 | Set volume, close normally and reopen MiSPlay. | The saved volume returns, including 0%; without a valid saved value, the fallback is 50%. |
 | M17 | Launch before opening a file | Time displays as `0:00 / --:--` |
 | M18 | Open an MP3 and let it play | Duration appears when available and elapsed time advances |
 | M19 | Pause, then resume | Elapsed time holds while paused and continues after resuming |
@@ -364,15 +396,15 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M52 | Adjust volume before an automatic transition | The next song uses the selected volume |
 | M53 | Open a single MP3 and let it finish | Playback returns to zero and remains silent |
 | M54 | Pause before the endpoint | Playback stays paused until resumed or manually changed |
-| M55 | Launch the app and click Repeat repeatedly. | The initial mode is OFF; clicks cycle through ALL, ONE and OFF. |
+| M55 | After restoration, set Repeat OFF, then click it repeatedly. | Clicks cycle through ALL, ONE and OFF; a new profile defaults to OFF. |
 | M56 | With Repeat OFF, let the final queued song finish. | Playback returns to zero and remains silent. |
 | M57 | With Repeat ALL and multiple songs, finish the final song; also try Next at the end and Previous at the beginning. | Automatic completion and manual navigation wrap around the queue. |
 | M58 | With Repeat ONE, finish a song, then press Next. | Completion replays the same song; Next starts the next song, which then repeats. |
 | M59 | Open a single MP3 and test Repeat ALL and ONE. | The song repeats automatically; Previous and Next remain disabled. |
 | M60 | Pause playback, then change repeat mode. | Playback remains paused and the controls reflect the new mode. |
 | M61 | Search or import files while a captured queue is playing with Repeat ALL. | Playback continues and loops through the original captured queue. |
-| M62 | Change repeat mode, start another queue, then restart the app. | New queues retain the mode and volume during the session; restarting resets repeat to OFF. |
-| M63 | Launch the app and toggle shuffle with an empty queue. | Shuffle starts OFF; toggling causes no error. |
+| M62 | Change repeat mode, start another queue, then restart the app. | New queues retain the mode and volume; saved choices return after restart while the active queue starts empty. |
+| M63 | Launch with an empty queue and toggle shuffle after restoration. | The switch starts at its saved value, or OFF for a new profile; toggling causes no error. |
 | M64 | Toggle shuffle during playback and while paused. | Playback position is preserved; paused playback remains paused. |
 | M65 | Enable shuffle and activate a middle song in a multi-song list. Advance through the queue. | The selected song plays first; every captured song appears once before the queue ends. |
 | M66 | Navigate backward and forward through a shuffled queue. | Previous and Next retrace the same order. |
@@ -381,7 +413,7 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M69 | With shuffle enabled, test Repeat ALL and ONE. | ALL loops through the same shuffled order. ONE repeats the current song; manual Next skips when available. |
 | M70 | Search and import files during shuffled playback, then activate another row. | The active queue stays unchanged until row activation captures a fresh queue from the visible results. |
 | M71 | Use Open MP3 with shuffle enabled; test Repeat ALL and ONE. | The queue contains one song, navigation buttons remain disabled, and automatic repeat works. |
-| M72 | Start another queue with shuffle enabled, then restart the app. | Shuffle remains enabled between queues during the session and resets to OFF after restart. |
+| M72 | Start another queue with shuffle enabled, then restart the app. | The ON switch is retained; the earlier queue/shuffled order is not restored. |
 | M73 | Play a tagged MP3. | The now-playing area displays its title, first stored artist value and album. |
 | M74 | Change songs through Open MP3, row activation, navigation and automatic advancement. | Metadata follows the current song. |
 | M75 | Skip several songs quickly. | An older result does not overwrite the final song's details. |
@@ -441,8 +473,8 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M129 | In a disposable harness, make a path insert fail, queue another import, remove the failure and press Retry save. | Failure status/Retry appear, pending paths are retained, playback/imports continue and the successful retry saves both batches in order. |
 | M130 | Launch a disposable harness with an unreadable/corrupt or newer-schema database, then import a file. | Loading fails visibly; temporary imports/playback remain available, saving stays disabled and the existing database is not reset. |
 | M131 | Close a disposable harness while initial restoration is still pending. | No late model/UI changes or errors occur; the accepted database task finishes and the process exits. |
-| M132 | Change volume/repeat/shuffle and play covered tracks, then close normally and relaunch. | Saved paths/order and valid text metadata return after validation; volume resets to 50%, repeat/shuffle to OFF and artwork loads only for playback requests. |
-| M133 | Upgrade a disposable schema-1 database containing known paths/IDs. | Schema becomes 2; paths, IDs and order remain, cache columns start empty and successful tag results are saved. |
+| M132 | Change volume/repeat/shuffle and play covered tracks, then close normally and relaunch. | Saved paths/order, validated text and playback preferences return; queue/song/position stay empty and artwork loads only for playback requests. |
+| M133 | Upgrade a disposable schema-1 database containing known paths/IDs. | Schema becomes 3; paths/IDs/order remain, cache columns fill from successful reads and preferences use defaults until edited. |
 | M134 | Fill caches, close normally, relaunch unchanged files and inspect parser calls with a debugger/harness. | Background attribute validation restores text metadata/search without calling the tag parser for those files. |
 | M135 | Close, change tags on a disposable saved MP3, then relaunch. | Changed size or modification time triggers a fresh read and updates the row/search before playback is required. |
 | M136 | In a disposable fixture harness, test same-size/time-only edits and size-only edits with unchanged time. | Either changed attribute invalidates cached text; available submillisecond timestamp differences are retained. |
@@ -454,6 +486,18 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M142 | With active/waiting metadata updates, close normally using a writable disposable database. | Accepted writes drain and the final flush stores the newest completed result; unfinished reads can be rebuilt next launch. |
 | M143 | In a disposable database, use an unsupported metadata-cache version or incomplete cache fields, then relaunch. | Paths still restore; invalid cached text becomes a miss and successful fresh tags replace it. |
 | M144 | Import an untagged but readable MP3, let its fallbacks save, then relaunch unchanged. | Filename/Unknown fallbacks are reused after validation without another tag parse. |
+| M145 | Upgrade a disposable schema-2 library with valid cached tags. | Schema becomes 3; paths, IDs, order and caches remain, and the new preferences table initially uses unsaved defaults. |
+| M146 | Set volume to 23%, Repeat ALL and Shuffle ON; close normally and reopen. | All choices return before controls become available; playback stays stopped. |
+| M147 | Save 0% and then 100% volume across separate restarts. | Both boundary values survive; 0% is not replaced by 50%, and the first explicit song uses restored volume. |
+| M148 | Save each repeat mode and both shuffle-switch values across launches. | Each choice returns; no particular old shuffled order is promised. |
+| M149 | Change volume/repeat/shuffle repeatedly while playing or paused, then let saving settle. | Runtime changes apply immediately, the final snapshot saves after the short delay and saving does not restart the song. |
+| M150 | Change all three controls, then close before the save delay finishes. | Normal close captures and restores the final choices on the next launch. |
+| M151 | In a disposable harness, delay initial loading and inspect controls/default writes. | Preference controls stay disabled; applying saved choices does not write startup defaults. |
+| M152 | Fail an older preference write, submit newer choices, remove the fault and press Retry save. | The newest pending choices win; controls remain usable during the failure. |
+| M153 | Put malformed preference fields in a disposable database, preserving some valid choices. | Invalid fields use defaults, valid fields survive and merely loading them does not rewrite the row. |
+| M154 | Start with an unreadable/future-schema disposable database, then change controls and close. | Temporary session choices work after loading fails; the original database/settings are not overwritten. |
+| M155 | In a disposable harness, fail a preference save batched with path/tag changes. | The whole batch rolls back; no partial path/cache/settings changes commit. |
+| M156 | Restore saved preferences, then select a library song for playback. | No prior queue/song/position is resumed automatically; the fresh queue uses the restored modes and volume. |
 
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
@@ -486,13 +530,13 @@ type: short description of the resulting behavior
 | `test` | Add meaningful verification |
 
 
-The metadata-cache checkpoint can use `feat: cache track metadata with file change detection` when its two changed Java files and documentation are committed together. If the feature code is already committed and only documentation remains, use `docs: document persistent metadata caching`.
+The playback-preferences checkpoint can use `feat: persist playback preferences` when its three changed Java files, new `PlaybackPreferences` record and documentation are committed together. If the feature code is already committed and only documentation remains, use `docs: document saved playback preferences`.
 
 For later checkpoints, update `CHANGELOG.md` when functionality changes. Update the README for changed features, prerequisites or run instructions. Update this guide when responsibilities, workflows or verification change. Do not invent documentation changes just to fill a checklist.
 
 ## Upcoming implementation notes
 
-- Add saved playback preferences next, followed by playlist relationships in later checkpoints.
+- Add manual playlists with saved names, membership and track order next; add favorites in a later checkpoint.
 - Keep database work and expensive file/image operations off the JavaFX Application Thread, applying observable-model changes on that thread.
 - Preserve stable Track identity and captured playback-queue behavior while adding persistence.
 - Extend refresh/invalidation to artwork and path repair; text metadata already validates size/time on startup, playback requests and reimport.
@@ -508,3 +552,5 @@ No memory/CPU baseline has been recorded for MiSPlay. Capture separate measureme
 - [JavaFX MediaPlayer](https://openjfx.io/javadoc/25/javafx.media/javafx/scene/media/MediaPlayer.html)
 - [JavaFX Application lifecycle](https://openjfx.io/javadoc/25/javafx.graphics/javafx/application/Application.html)
 - [JavaFX with Maven](https://openjfx.io/openjfx-docs/maven)
+- [JavaFX PauseTransition](https://openjfx.io/javadoc/25/javafx.graphics/javafx/animation/PauseTransition.html)
+- [SQLite UPSERT](https://www.sqlite.org/lang_upsert.html)

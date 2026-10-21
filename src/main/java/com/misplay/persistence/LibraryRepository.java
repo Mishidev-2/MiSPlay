@@ -1,6 +1,8 @@
 package com.misplay.persistence;
 
 import com.misplay.model.TrackMetadata;
+import com.misplay.model.PlaybackPreferences;
+import com.misplay.model.RepeatMode;
 
 import java.io.File;
 import java.io.IOException;
@@ -18,7 +20,7 @@ import java.util.Objects;
 
 /** Blocking database operations. Call these methods on the database worker. */
 public final class LibraryRepository {
-    private static final int SCHEMA_VERSION = 2;
+    private static final int SCHEMA_VERSION = 3;
     // Bump this when tag interpretation or fallback rules change.
     private static final int METADATA_CACHE_VERSION = 1;
     private final Path databasePath;
@@ -46,6 +48,14 @@ public final class LibraryRepository {
         }
     }
 
+    /** Paths, caches and preferences read together before startup is unlocked. */
+    public record LibraryState(List<SavedTrack> tracks, PlaybackPreferences preferences) {
+        public LibraryState {
+            tracks = List.copyOf(tracks);
+            Objects.requireNonNull(preferences);
+        }
+    }
+
     public LibraryRepository(Path databasePath) {
         this.databasePath = Objects.requireNonNull(databasePath)
                 .toAbsolutePath().normalize();
@@ -70,34 +80,94 @@ public final class LibraryRepository {
     }
 
     public List<SavedTrack> loadLibrary() throws IOException, SQLException {
+        return loadState().tracks();
+    }
+
+    public LibraryState loadState() throws IOException, SQLException {
         try (Connection connection = openConnection()) {
             initializeSchema(connection);
+            connection.setAutoCommit(false);
 
-            List<SavedTrack> entries = new ArrayList<>();
+            try {
+                List<SavedTrack> entries = readTracks(connection);
+                PlaybackPreferences preferences = readPreferences(connection);
+                connection.commit();
+                return new LibraryState(entries, preferences);
+            } catch (SQLException | RuntimeException error) {
+                rollback(connection, error);
+                throw error;
+            }
+        }
+    }
 
-            try (Statement statement = connection.createStatement();
-                 ResultSet rows = statement.executeQuery(
-                         """
-                         SELECT path, title, artist, album, file_size,
-                                modified_time, metadata_version
-                         FROM library_tracks ORDER BY id
-                         """
-                 )) {
-                while (rows.next()) {
-                    Path path = Path.of(rows.getString("path"));
+    private static List<SavedTrack> readTracks(Connection connection) throws SQLException {
+        List<SavedTrack> entries = new ArrayList<>();
 
-                    if (!path.isAbsolute()) {
-                        throw new SQLException("Saved library contains a relative path.");
-                    }
+        try (Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery(
+                     """
+                     SELECT path, title, artist, album, file_size,
+                            modified_time, metadata_version
+                     FROM library_tracks ORDER BY id
+                     """
+             )) {
+            while (rows.next()) {
+                Path path = Path.of(rows.getString("path"));
 
-                    // Missing files remain library members, including offline drives.
-                    entries.add(new SavedTrack(
-                            path.normalize().toFile(), readCachedMetadata(rows)
-                    ));
+                if (!path.isAbsolute()) {
+                    throw new SQLException("Saved library contains a relative path.");
+                }
+
+                // Missing files remain library members, including offline drives.
+                entries.add(new SavedTrack(
+                        path.normalize().toFile(), readCachedMetadata(rows)
+                ));
+            }
+        }
+
+        return List.copyOf(entries);
+    }
+
+    private static PlaybackPreferences readPreferences(Connection connection)
+            throws SQLException {
+        PlaybackPreferences defaults = PlaybackPreferences.defaults();
+
+        try (Statement statement = connection.createStatement();
+             ResultSet row = statement.executeQuery(
+                     "SELECT volume, repeat_mode, shuffle_enabled "
+                             + "FROM playback_preferences WHERE id = 1"
+             )) {
+            if (!row.next()) {
+                return defaults;
+            }
+
+            double volume = defaults.volume();
+            Object storedVolume = row.getObject("volume");
+
+            if (storedVolume instanceof Number number) {
+                double value = number.doubleValue();
+
+                if (Double.isFinite(value) && value >= 0.0 && value <= 1.0) {
+                    volume = value;
                 }
             }
 
-            return List.copyOf(entries);
+            RepeatMode repeatMode = defaults.repeatMode();
+            String storedRepeat = row.getString("repeat_mode");
+
+            if (storedRepeat != null) {
+                try {
+                    repeatMode = RepeatMode.valueOf(storedRepeat);
+                } catch (IllegalArgumentException ignored) {
+                    // Unknown choices use a safe default without losing other settings.
+                }
+            }
+
+            Object storedShuffle = row.getObject("shuffle_enabled");
+            boolean shuffle = storedShuffle instanceof Number number
+                    && number.doubleValue() == 1.0;
+
+            return new PlaybackPreferences(volume, repeatMode, shuffle);
         }
     }
 
@@ -108,7 +178,15 @@ public final class LibraryRepository {
     /** Inserts paths before updating their cache, preserving library order. */
     public void saveChanges(List<File> files, List<SavedTrack> metadataChanges)
             throws IOException, SQLException {
-        if (files.isEmpty() && metadataChanges.isEmpty()) {
+        saveChanges(files, metadataChanges, null);
+    }
+
+    /** Null preferences means this batch does not change playback settings. */
+    public void saveChanges(
+            List<File> files, List<SavedTrack> metadataChanges,
+            PlaybackPreferences preferences
+    ) throws IOException, SQLException {
+        if (files.isEmpty() && metadataChanges.isEmpty() && preferences == null) {
             return;
         }
 
@@ -166,6 +244,28 @@ public final class LibraryRepository {
                     for (int count : update.executeBatch()) {
                         if (count == 0) {
                             throw new SQLException("A cached track path is missing from the database.");
+                        }
+                    }
+                }
+
+                if (preferences != null) {
+                    try (PreparedStatement save = connection.prepareStatement(
+                            """
+                            INSERT INTO playback_preferences
+                                (id, volume, repeat_mode, shuffle_enabled)
+                            VALUES (1, ?, ?, ?)
+                            ON CONFLICT(id) DO UPDATE SET
+                                volume = excluded.volume,
+                                repeat_mode = excluded.repeat_mode,
+                                shuffle_enabled = excluded.shuffle_enabled
+                            """
+                    )) {
+                        save.setDouble(1, preferences.volume());
+                        save.setString(2, preferences.repeatMode().name());
+                        save.setInt(3, preferences.shuffleEnabled() ? 1 : 0);
+
+                        if (save.executeUpdate() != 1) {
+                            throw new SQLException("Playback preferences were not saved.");
                         }
                     }
                 }
@@ -271,12 +371,37 @@ public final class LibraryRepository {
                     // The query checks that the required columns exist.
                 }
 
-                statement.execute("ALTER TABLE library_tracks ADD COLUMN title TEXT");
-                statement.execute("ALTER TABLE library_tracks ADD COLUMN artist TEXT");
-                statement.execute("ALTER TABLE library_tracks ADD COLUMN album TEXT");
-                statement.execute("ALTER TABLE library_tracks ADD COLUMN file_size INTEGER");
-                statement.execute("ALTER TABLE library_tracks ADD COLUMN modified_time TEXT");
-                statement.execute("ALTER TABLE library_tracks ADD COLUMN metadata_version INTEGER");
+                if (version < 2) {
+                    statement.execute("ALTER TABLE library_tracks ADD COLUMN title TEXT");
+                    statement.execute("ALTER TABLE library_tracks ADD COLUMN artist TEXT");
+                    statement.execute("ALTER TABLE library_tracks ADD COLUMN album TEXT");
+                    statement.execute("ALTER TABLE library_tracks ADD COLUMN file_size INTEGER");
+                    statement.execute("ALTER TABLE library_tracks ADD COLUMN modified_time TEXT");
+                    statement.execute("ALTER TABLE library_tracks ADD COLUMN metadata_version INTEGER");
+                }
+
+                try (ResultSet ignored = statement.executeQuery(
+                        "SELECT title, artist, album, file_size, modified_time, "
+                                + "metadata_version FROM library_tracks LIMIT 0"
+                )) {
+                    // Verify the existing cache columns before claiming schema 3.
+                }
+
+                statement.execute("""
+                        CREATE TABLE IF NOT EXISTS playback_preferences (
+                            id INTEGER PRIMARY KEY CHECK (id = 1),
+                            volume REAL NOT NULL,
+                            repeat_mode TEXT NOT NULL,
+                            shuffle_enabled INTEGER NOT NULL
+                        )
+                        """);
+
+                try (ResultSet ignored = statement.executeQuery(
+                        "SELECT id, volume, repeat_mode, shuffle_enabled "
+                                + "FROM playback_preferences LIMIT 0"
+                )) {
+                    // An incompatible existing table must fail, not be replaced.
+                }
 
                 statement.execute("PRAGMA user_version = " + SCHEMA_VERSION);
             }

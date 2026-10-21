@@ -16,7 +16,7 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Playback queues captured from visible library results and preserved across searches and imports; Open MP3 creates a single-song queue.
 - Manual Previous/Next navigation and automatic queue advancement, preserving the current volume.
 - Repeat Off, Repeat All and Repeat One, including queue wrapping and manual skipping while repeating one song.
-- Session-only shuffle with consistent Previous/Next navigation, Repeat All support and restoration of the captured order when disabled.
+- Shuffle with consistent Previous/Next navigation, Repeat All support and restoration of the captured order when disabled; queue order lasts for the current session.
 - Jaudiotagger 3.0.1 integration for title, first stored artist value, album and embedded artwork reading.
 - An observable `Track` model with metadata and PENDING, LOADING, LOADED or FAILED status, plus an immutable `TrackMetadata` record.
 - Automatic background metadata loading for imported tracks using one reader, priority for the selected song and continued loading after unreadable files.
@@ -38,13 +38,18 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Before/after file checks around fresh tag reads, with one retry for concurrent edits and no unbounded retry loop.
 - Cached successful missing-tag fallbacks, stale-cache clearing after failed checks/reads and explicit same-launch retry for repaired files.
 - Transactional path/cache batches using UPDATE for cached fields, plus newest-result preservation across failed writes and normal-close flushing.
-- Shutdown handling for the audio player, label bindings, background metadata reads, folder scans and artwork work, plus draining accepted database writes and a final idempotent path/cache save on normal close.
+- Schema 3 migration adding a singleton playback-preferences table while retaining existing paths, IDs, order and valid metadata caches.
+- An immutable `PlaybackPreferences` record for volume, repeat mode and the shuffle switch; invalid caller values are rejected and malformed saved values fall back per field.
+- Startup library/settings snapshots loaded in one read transaction, with preference controls gated until restored choices are available and no automatic playback.
+- Delayed preference saves after about 250 ms of control inactivity, startup guards preventing default overwrites, and immediate capture of the latest controls on normal close.
+- Transactional preference/path/cache batches using the existing Retry save action and newest-snapshot preservation after failures.
+- Shutdown handling for the audio player, label bindings, background metadata reads, folder scans and artwork work, plus draining accepted writes and a final path/cache/preferences save on normal close.
 
 ### Changed
 
 - Metadata scheduling is owned by `LibraryService`. Changing songs prioritizes a waiting read without cancelling the active read; now-playing labels observe only the selected track.
 - Library rows and search use cached metadata rather than filename-only display/matching.
-- Library membership, order and valid text metadata now survive restart. Playback queues/settings and artwork caches remain session-only; restored tracks validate cached tags before reusing them.
+- Library membership, order, valid text metadata and volume/repeat/shuffle choices survive restart. Active queues, selected tracks, playback positions, shuffled orders and artwork caches remain session-only; restored tracks validate cached tags before reusing them.
 - Reimporting or requesting playback of a loaded/failed Track now schedules a deduplicated metadata check while preserving Track identity. Unchanged files reuse tags; edited/repaired files receive fresh reads.
 
 ### Verification
@@ -52,7 +57,9 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Maven validation and JavaFX window launch were confirmed on Windows 11.
 - The developer reported working playback/library metadata, folder importing, embedded artwork and SQLite library-path checkpoints. Detailed per-check Windows results have not been recorded.
 - The current application was reported working after the metadata-cache handoff; individual cache/migration scenarios have not been recorded as Windows passes.
+- The developer reported the playback-preferences checkpoint working. Detailed results for each Windows scenario have not been recorded.
 - Development-time headless artwork checks covered JPEG/PNG resizing, Unicode filenames, cache reuse/eviction, missing/damaged covers, invalid-file recovery, rapid selection changes and shutdown. These checks do not establish a full Windows playback regression result.
 - SQLite checks covered real database creation/restart, path normalization, duplicates/order, Unicode paths, transaction rollback, missing paths, schema rejection and corrupt-file preservation. Headless coordination/UI checks covered restore/import gating, queued writes/retry, folder imports/cancellation, responsive controls during a database lock, normal-close saves, process exit and no automatic playback. These used JDK 17/JavaFX 21.0.1 with substitutes for some unchanged services; they do not establish a full Java 25/JavaFX 25.0.2 Windows build or audio regression result.
 - The metadata-cache checkpoint passed 30 focused checks covering migration/rollback, invalid cache fields/version, parser-call avoidance after restart, size/time invalidation including submillisecond changes, live selection/reimport refresh, missing/repaired files, bounded reads during concurrent edits, save retry, newest-result shutdown behavior, cached fallbacks and an 80-track batch. The existing 12 repository, 21 library and 7 UI checks also passed in that harness; the same environment/substitute-class limits apply.
+- The preferences checkpoint passed 35 model/repository, 16 settings/cache-coordination and 19 application checks. Coverage included schema 0/1/2 migration, retained caches, all repeat/shuffle combinations, mute/full/decimal volume, invalid values, atomic rollback, startup gating, delayed combined saves, first explicit playback volume, retry, immediate close and failed-startup session use. The same Java 17/JavaFX 21.0.1 harness and substitute-class limits apply.
 - No committed automated project test suite or memory/CPU profiling baseline has been recorded.

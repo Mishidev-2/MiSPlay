@@ -3,9 +3,11 @@ package com.misplay.service;
 import com.misplay.model.FolderScanResult;
 import com.misplay.model.Track;
 import com.misplay.model.TrackMetadata;
+import com.misplay.model.PlaybackPreferences;
 import com.misplay.persistence.LibraryRepository;
 import com.misplay.persistence.LibraryRepository.CachedMetadata;
 import com.misplay.persistence.LibraryRepository.SavedTrack;
+import com.misplay.persistence.LibraryRepository.LibraryState;
 import javafx.beans.Observable;
 import javafx.beans.property.ReadOnlyBooleanProperty;
 import javafx.beans.property.ReadOnlyBooleanWrapper;
@@ -87,7 +89,7 @@ public class LibraryService implements AutoCloseable {
     private final ReadOnlyBooleanWrapper librarySaveFailed =
             new ReadOnlyBooleanWrapper(false);
     private final ReadOnlyStringWrapper libraryStorageMessage =
-            new ReadOnlyStringWrapper("Loading saved library...");
+            new ReadOnlyStringWrapper("Loading saved library and settings...");
 
     // A single worker owns all database operations. It drains accepted writes
     // on normal shutdown, so this thread deliberately is not a daemon.
@@ -100,10 +102,13 @@ public class LibraryService implements AutoCloseable {
 
     private final Set<File> pendingDatabaseFiles = new LinkedHashSet<>();
     private final Map<Path, SavedTrack> pendingDatabaseMetadata = new LinkedHashMap<>();
-    private Task<List<SavedTrack>> restoreTask;
+    private Task<LibraryState> restoreTask;
     private Task<Void> saveTask;
     private List<File> activeDatabaseFiles = List.of();
     private List<SavedTrack> activeDatabaseMetadata = List.of();
+    private PlaybackPreferences playbackPreferences = PlaybackPreferences.defaults();
+    private PlaybackPreferences pendingPreferences;
+    private PlaybackPreferences activePreferences;
     private boolean restoreStarted;
     private boolean persistenceEnabled;
 
@@ -135,6 +140,34 @@ public class LibraryService implements AutoCloseable {
         return libraryStorageMessage.getReadOnlyProperty();
     }
 
+    public PlaybackPreferences getPlaybackPreferences() {
+        return playbackPreferences;
+    }
+
+    public void setPlaybackPreferences(PlaybackPreferences preferences) {
+        if (closed) {
+            return;
+        }
+
+        if (restoringLibrary.get()) {
+            throw new IllegalStateException("Wait for the saved settings to finish loading.");
+        }
+
+        Objects.requireNonNull(preferences);
+
+        if (preferences.equals(playbackPreferences)) {
+            return;
+        }
+
+        playbackPreferences = preferences;
+
+        if (persistenceEnabled) {
+            // A waiting snapshot always represents the latest user choices.
+            pendingPreferences = preferences;
+            writeNextFiles();
+        }
+    }
+
     // Call once from Application.start, after the UI bindings are installed.
     public void restoreLibrary() {
         if (closed || restoreStarted) {
@@ -143,10 +176,10 @@ public class LibraryService implements AutoCloseable {
 
         restoreStarted = true;
 
-        Task<List<SavedTrack>> task = new Task<>() {
+        Task<LibraryState> task = new Task<>() {
             @Override
-            protected List<SavedTrack> call() throws Exception {
-                return libraryRepository.loadLibrary();
+            protected LibraryState call() throws Exception {
+                return libraryRepository.loadState();
             }
         };
 
@@ -158,8 +191,9 @@ public class LibraryService implements AutoCloseable {
             }
 
             List<File> files = new ArrayList<>();
+            LibraryState state = task.getValue();
 
-            for (SavedTrack entry : task.getValue()) {
+            for (SavedTrack entry : state.tracks()) {
                 files.add(entry.file());
 
                 if (entry.cachedMetadata() != null) {
@@ -167,12 +201,14 @@ public class LibraryService implements AutoCloseable {
                 }
             }
 
+            // Assign before restoringLibrary becomes false and the UI unlocks.
+            playbackPreferences = state.preferences();
             persistenceEnabled = true;
             registerFiles(files);
             restoreTask = null;
             libraryStorageMessage.set(
                     tracks.isEmpty()
-                            ? "Library ready. Imported tracks will be saved."
+                            ? "Library ready. Changes will be saved."
                             : "Restored " + tracks.size() + " saved tracks."
             );
             restoringLibrary.set(false);
@@ -186,8 +222,8 @@ public class LibraryService implements AutoCloseable {
             restoreTask = null;
             persistenceEnabled = false;
             libraryStorageMessage.set(
-                    "Saved library could not be opened. "
-                            + "New imports will not be saved this session."
+                    "Saved library or settings could not be opened. "
+                            + "Changes will not be saved this session."
             );
             restoringLibrary.set(false);
             System.err.println(
@@ -272,19 +308,22 @@ public class LibraryService implements AutoCloseable {
     private void writeNextFiles() {
         if (closed || !persistenceEnabled || saveTask != null
                 || librarySaveFailed.get()
-                || (pendingDatabaseFiles.isEmpty() && pendingDatabaseMetadata.isEmpty())) {
+                || (pendingDatabaseFiles.isEmpty() && pendingDatabaseMetadata.isEmpty()
+                        && pendingPreferences == null)) {
             return;
         }
 
         List<File> batch = List.copyOf(pendingDatabaseFiles);
         List<SavedTrack> metadataBatch = List.copyOf(pendingDatabaseMetadata.values());
+        PlaybackPreferences preferencesBatch = pendingPreferences;
         pendingDatabaseFiles.clear();
         pendingDatabaseMetadata.clear();
+        pendingPreferences = null;
 
         Task<Void> task = new Task<>() {
             @Override
             protected Void call() throws Exception {
-                libraryRepository.saveChanges(batch, metadataBatch);
+                libraryRepository.saveChanges(batch, metadataBatch, preferencesBatch);
                 return null;
             }
         };
@@ -292,8 +331,9 @@ public class LibraryService implements AutoCloseable {
         saveTask = task;
         activeDatabaseFiles = batch;
         activeDatabaseMetadata = metadataBatch;
+        activePreferences = preferencesBatch;
         savingLibrary.set(true);
-        libraryStorageMessage.set("Saving library...");
+        libraryStorageMessage.set("Saving library and settings...");
 
         task.setOnSucceeded(event -> {
             if (closed || saveTask != task) {
@@ -303,8 +343,9 @@ public class LibraryService implements AutoCloseable {
             saveTask = null;
             activeDatabaseFiles = List.of();
             activeDatabaseMetadata = List.of();
+            activePreferences = null;
             savingLibrary.set(false);
-            libraryStorageMessage.set("Library saved.");
+            libraryStorageMessage.set("Library and settings saved.");
             writeNextFiles();
         });
 
@@ -324,13 +365,19 @@ public class LibraryService implements AutoCloseable {
             pendingDatabaseMetadata.clear();
             retainMetadataChanges(pendingDatabaseMetadata, metadataBatch);
             retainMetadataChanges(pendingDatabaseMetadata, waitingMetadata);
+
+            if (pendingPreferences == null) {
+                pendingPreferences = preferencesBatch;
+            }
+
             saveTask = null;
             activeDatabaseFiles = List.of();
             activeDatabaseMetadata = List.of();
+            activePreferences = null;
             savingLibrary.set(false);
             librarySaveFailed.set(true);
             libraryStorageMessage.set(
-                    "Library changes could not be saved. You can retry."
+                    "Library or settings changes could not be saved. You can retry."
             );
             System.err.println(
                     "Library save failed for " + getLibraryDatabasePath()
@@ -637,21 +684,28 @@ public class LibraryService implements AutoCloseable {
         Map<Path, SavedTrack> finalMetadata = new LinkedHashMap<>();
         retainMetadataChanges(finalMetadata, activeDatabaseMetadata);
         retainMetadataChanges(finalMetadata, List.copyOf(pendingDatabaseMetadata.values()));
+        PlaybackPreferences finalPreferences = pendingPreferences != null
+                ? pendingPreferences : activePreferences;
         pendingDatabaseFiles.clear();
         pendingDatabaseMetadata.clear();
+        pendingPreferences = null;
         restoreTask = null;
         saveTask = null;
         activeDatabaseFiles = List.of();
         activeDatabaseMetadata = List.of();
+        activePreferences = null;
         savingLibrary.set(false);
         restoringLibrary.set(false);
 
-        if (persistenceEnabled && (!finalFiles.isEmpty() || !finalMetadata.isEmpty())) {
+        if (persistenceEnabled && (!finalFiles.isEmpty() || !finalMetadata.isEmpty()
+                || finalPreferences != null)) {
             List<File> finalBatch = List.copyOf(finalFiles);
             List<SavedTrack> finalMetadataBatch = List.copyOf(finalMetadata.values());
             databaseExecutor.execute(() -> {
                 try {
-                    libraryRepository.saveChanges(finalBatch, finalMetadataBatch);
+                    libraryRepository.saveChanges(
+                            finalBatch, finalMetadataBatch, finalPreferences
+                    );
                 } catch (Exception error) {
                     System.err.println(
                             "Final library save failed for " + getLibraryDatabasePath()
