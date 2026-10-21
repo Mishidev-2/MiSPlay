@@ -1,5 +1,7 @@
 package com.misplay.persistence;
 
+import com.misplay.model.TrackMetadata;
+
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -16,8 +18,33 @@ import java.util.Objects;
 
 /** Blocking database operations. Call these methods on the database worker. */
 public final class LibraryRepository {
-    private static final int SCHEMA_VERSION = 1;
+    private static final int SCHEMA_VERSION = 2;
+    // Bump this when tag interpretation or fallback rules change.
+    private static final int METADATA_CACHE_VERSION = 1;
     private final Path databasePath;
+
+    /** A tag result together with the file attributes it was read from. */
+    public record CachedMetadata(
+            TrackMetadata metadata,
+            long fileSize,
+            String modifiedTime
+    ) {
+        public CachedMetadata {
+            Objects.requireNonNull(metadata);
+            Objects.requireNonNull(modifiedTime);
+
+            if (fileSize < 0) {
+                throw new IllegalArgumentException("File size cannot be negative.");
+            }
+        }
+    }
+
+    /** Null cachedMetadata means that this path needs a fresh tag read. */
+    public record SavedTrack(File file, CachedMetadata cachedMetadata) {
+        public SavedTrack {
+            Objects.requireNonNull(file);
+        }
+    }
 
     public LibraryRepository(Path databasePath) {
         this.databasePath = Objects.requireNonNull(databasePath)
@@ -39,14 +66,22 @@ public final class LibraryRepository {
     }
 
     public List<File> loadFiles() throws IOException, SQLException {
+        return loadLibrary().stream().map(SavedTrack::file).toList();
+    }
+
+    public List<SavedTrack> loadLibrary() throws IOException, SQLException {
         try (Connection connection = openConnection()) {
             initializeSchema(connection);
 
-            List<File> files = new ArrayList<>();
+            List<SavedTrack> entries = new ArrayList<>();
 
             try (Statement statement = connection.createStatement();
                  ResultSet rows = statement.executeQuery(
-                         "SELECT path FROM library_tracks ORDER BY id"
+                         """
+                         SELECT path, title, artist, album, file_size,
+                                modified_time, metadata_version
+                         FROM library_tracks ORDER BY id
+                         """
                  )) {
                 while (rows.next()) {
                     Path path = Path.of(rows.getString("path"));
@@ -56,16 +91,24 @@ public final class LibraryRepository {
                     }
 
                     // Missing files remain library members, including offline drives.
-                    files.add(path.normalize().toFile());
+                    entries.add(new SavedTrack(
+                            path.normalize().toFile(), readCachedMetadata(rows)
+                    ));
                 }
             }
 
-            return List.copyOf(files);
+            return List.copyOf(entries);
         }
     }
 
     public void addFiles(List<File> files) throws IOException, SQLException {
-        if (files.isEmpty()) {
+        saveChanges(files, List.of());
+    }
+
+    /** Inserts paths before updating their cache, preserving library order. */
+    public void saveChanges(List<File> files, List<SavedTrack> metadataChanges)
+            throws IOException, SQLException {
+        if (files.isEmpty() && metadataChanges.isEmpty()) {
             return;
         }
 
@@ -89,12 +132,73 @@ public final class LibraryRepository {
                     insert.executeBatch();
                 }
 
+                try (PreparedStatement update = connection.prepareStatement(
+                        """
+                        UPDATE library_tracks
+                        SET title = ?, artist = ?, album = ?, file_size = ?,
+                            modified_time = ?, metadata_version = ?
+                        WHERE path = ?
+                        """
+                )) {
+                    for (SavedTrack change : metadataChanges) {
+                        CachedMetadata cached = change.cachedMetadata();
+
+                        if (cached == null) {
+                            for (int index = 1; index <= 6; index++) {
+                                int type = index == 4 || index == 6
+                                        ? java.sql.Types.BIGINT : java.sql.Types.VARCHAR;
+                                update.setNull(index, type);
+                            }
+                        } else {
+                            update.setString(1, cached.metadata().title());
+                            update.setString(2, cached.metadata().artist());
+                            update.setString(3, cached.metadata().album());
+                            update.setLong(4, cached.fileSize());
+                            update.setString(5, cached.modifiedTime());
+                            update.setInt(6, METADATA_CACHE_VERSION);
+                        }
+
+                        update.setString(7, change.file().toPath()
+                                .toAbsolutePath().normalize().toString());
+                        update.addBatch();
+                    }
+
+                    for (int count : update.executeBatch()) {
+                        if (count == 0) {
+                            throw new SQLException("A cached track path is missing from the database.");
+                        }
+                    }
+                }
+
                 connection.commit();
             } catch (SQLException | RuntimeException error) {
                 rollback(connection, error);
                 throw error;
             }
         }
+    }
+
+    private static CachedMetadata readCachedMetadata(ResultSet row)
+            throws SQLException {
+        String title = row.getString("title");
+        String artist = row.getString("artist");
+        String album = row.getString("album");
+        String modifiedTime = row.getString("modified_time");
+        long fileSize = row.getLong("file_size");
+        boolean missingSize = row.wasNull();
+
+        if (row.getInt("metadata_version") != METADATA_CACHE_VERSION
+                || missingSize || fileSize < 0
+                || title == null || title.isBlank()
+                || artist == null || artist.isBlank()
+                || album == null || album.isBlank()
+                || modifiedTime == null || modifiedTime.isBlank()) {
+            return null;
+        }
+
+        return new CachedMetadata(
+                new TrackMetadata(title, artist, album), fileSize, modifiedTime
+        );
     }
 
     private Connection openConnection() throws IOException, SQLException {
@@ -151,19 +255,28 @@ public final class LibraryRepository {
 
         try {
             try (Statement statement = connection.createStatement()) {
-                statement.execute("""
-                        CREATE TABLE IF NOT EXISTS library_tracks (
-                            id INTEGER PRIMARY KEY,
-                            path TEXT NOT NULL UNIQUE
-                        )
-                        """);
+                if (version == 0) {
+                    statement.execute("""
+                            CREATE TABLE IF NOT EXISTS library_tracks (
+                                id INTEGER PRIMARY KEY,
+                                path TEXT NOT NULL UNIQUE
+                            )
+                            """);
+                }
 
-                // Verify an existing version-zero table before claiming this schema.
+                // Check the old table before upgrading; migration is transactional.
                 try (ResultSet ignored = statement.executeQuery(
                         "SELECT id, path FROM library_tracks LIMIT 0"
                 )) {
                     // The query checks that the required columns exist.
                 }
+
+                statement.execute("ALTER TABLE library_tracks ADD COLUMN title TEXT");
+                statement.execute("ALTER TABLE library_tracks ADD COLUMN artist TEXT");
+                statement.execute("ALTER TABLE library_tracks ADD COLUMN album TEXT");
+                statement.execute("ALTER TABLE library_tracks ADD COLUMN file_size INTEGER");
+                statement.execute("ALTER TABLE library_tracks ADD COLUMN modified_time TEXT");
+                statement.execute("ALTER TABLE library_tracks ADD COLUMN metadata_version INTEGER");
 
                 statement.execute("PRAGMA user_version = " + SCHEMA_VERSION);
             }

@@ -1,10 +1,11 @@
 package com.misplay.service;
 
 import com.misplay.model.FolderScanResult;
-import com.misplay.model.MetadataStatus;
 import com.misplay.model.Track;
 import com.misplay.model.TrackMetadata;
 import com.misplay.persistence.LibraryRepository;
+import com.misplay.persistence.LibraryRepository.CachedMetadata;
+import com.misplay.persistence.LibraryRepository.SavedTrack;
 import javafx.beans.Observable;
 import javafx.beans.property.ReadOnlyBooleanProperty;
 import javafx.beans.property.ReadOnlyBooleanWrapper;
@@ -15,14 +16,20 @@ import javafx.collections.ObservableList;
 import javafx.concurrent.Task;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -40,6 +47,8 @@ public class LibraryService implements AutoCloseable {
     private final Map<Path, Track> tracksByPath = new HashMap<>();
 
     private final Deque<Track> pendingMetadata = new ArrayDeque<>();
+    private final Set<Track> queuedMetadata = new HashSet<>();
+    private final Map<Path, CachedMetadata> metadataCache = new HashMap<>();
     private final MetadataService metadataService = new MetadataService();
 
     private final ExecutorService metadataExecutor =
@@ -49,7 +58,9 @@ public class LibraryService implements AutoCloseable {
                 return worker;
             });
 
-    private Task<TrackMetadata> metadataTask;
+    private record MetadataReadResult(CachedMetadata cached, boolean freshRead) {}
+
+    private Task<MetadataReadResult> metadataTask;
     private Track readingTrack;
     private boolean closed;
 
@@ -88,9 +99,11 @@ public class LibraryService implements AutoCloseable {
             });
 
     private final Set<File> pendingDatabaseFiles = new LinkedHashSet<>();
-    private Task<List<File>> restoreTask;
+    private final Map<Path, SavedTrack> pendingDatabaseMetadata = new LinkedHashMap<>();
+    private Task<List<SavedTrack>> restoreTask;
     private Task<Void> saveTask;
     private List<File> activeDatabaseFiles = List.of();
+    private List<SavedTrack> activeDatabaseMetadata = List.of();
     private boolean restoreStarted;
     private boolean persistenceEnabled;
 
@@ -130,10 +143,10 @@ public class LibraryService implements AutoCloseable {
 
         restoreStarted = true;
 
-        Task<List<File>> task = new Task<>() {
+        Task<List<SavedTrack>> task = new Task<>() {
             @Override
-            protected List<File> call() throws Exception {
-                return libraryRepository.loadFiles();
+            protected List<SavedTrack> call() throws Exception {
+                return libraryRepository.loadLibrary();
             }
         };
 
@@ -144,8 +157,18 @@ public class LibraryService implements AutoCloseable {
                 return;
             }
 
-            registerFiles(task.getValue());
+            List<File> files = new ArrayList<>();
+
+            for (SavedTrack entry : task.getValue()) {
+                files.add(entry.file());
+
+                if (entry.cachedMetadata() != null) {
+                    metadataCache.put(entry.file().toPath(), entry.cachedMetadata());
+                }
+            }
+
             persistenceEnabled = true;
+            registerFiles(files);
             restoreTask = null;
             libraryStorageMessage.set(
                     tracks.isEmpty()
@@ -218,18 +241,21 @@ public class LibraryService implements AutoCloseable {
 
         for (File file : files) {
             Path path = file.toPath().toAbsolutePath().normalize();
+            Track track = tracksByPath.get(path);
 
-            if (!tracksByPath.containsKey(path)) {
-                Track track = new Track(path.toFile());
+            if (track == null) {
+                track = new Track(path.toFile());
 
                 tracksByPath.put(path, track);
                 additions.add(track);
             }
+
+            // Reimporting an existing path also checks for edited/repaired files.
+            queueMetadataCheck(track, false);
         }
 
         tracks.addAll(additions);
 
-        pendingMetadata.addAll(additions);
         readNextMetadata();
         return additions;
     }
@@ -245,23 +271,27 @@ public class LibraryService implements AutoCloseable {
 
     private void writeNextFiles() {
         if (closed || !persistenceEnabled || saveTask != null
-                || librarySaveFailed.get() || pendingDatabaseFiles.isEmpty()) {
+                || librarySaveFailed.get()
+                || (pendingDatabaseFiles.isEmpty() && pendingDatabaseMetadata.isEmpty())) {
             return;
         }
 
         List<File> batch = List.copyOf(pendingDatabaseFiles);
+        List<SavedTrack> metadataBatch = List.copyOf(pendingDatabaseMetadata.values());
         pendingDatabaseFiles.clear();
+        pendingDatabaseMetadata.clear();
 
         Task<Void> task = new Task<>() {
             @Override
             protected Void call() throws Exception {
-                libraryRepository.addFiles(batch);
+                libraryRepository.saveChanges(batch, metadataBatch);
                 return null;
             }
         };
 
         saveTask = task;
         activeDatabaseFiles = batch;
+        activeDatabaseMetadata = metadataBatch;
         savingLibrary.set(true);
         libraryStorageMessage.set("Saving library...");
 
@@ -272,6 +302,7 @@ public class LibraryService implements AutoCloseable {
 
             saveTask = null;
             activeDatabaseFiles = List.of();
+            activeDatabaseMetadata = List.of();
             savingLibrary.set(false);
             libraryStorageMessage.set("Library saved.");
             writeNextFiles();
@@ -282,13 +313,20 @@ public class LibraryService implements AutoCloseable {
                 return;
             }
 
-            // Preserve unsaved paths for an explicit retry or the shutdown flush.
+            // Preserve unsaved changes for an explicit retry or the shutdown flush.
             List<File> waiting = new ArrayList<>(pendingDatabaseFiles);
             pendingDatabaseFiles.clear();
             pendingDatabaseFiles.addAll(batch);
             pendingDatabaseFiles.addAll(waiting);
+
+            // A newer result for a path must win over a failed, older write.
+            List<SavedTrack> waitingMetadata = List.copyOf(pendingDatabaseMetadata.values());
+            pendingDatabaseMetadata.clear();
+            retainMetadataChanges(pendingDatabaseMetadata, metadataBatch);
+            retainMetadataChanges(pendingDatabaseMetadata, waitingMetadata);
             saveTask = null;
             activeDatabaseFiles = List.of();
+            activeDatabaseMetadata = List.of();
             savingLibrary.set(false);
             librarySaveFailed.set(true);
             libraryStorageMessage.set(
@@ -310,17 +348,25 @@ public class LibraryService implements AutoCloseable {
 
         Track track = getTrack(file);
 
-        if (track == readingTrack
-                || track.isMetadataLoaded()
-                || track.getMetadataStatus() == MetadataStatus.FAILED) {
+        // Even a loaded/failed Track can have been edited or repaired on disk.
+        queueMetadataCheck(track, true);
+        readNextMetadata();
+    }
+
+    private void queueMetadataCheck(Track track, boolean priority) {
+        if (track == readingTrack) {
             return;
         }
 
-        if (pendingMetadata.remove(track)) {
-            pendingMetadata.addFirst(track);
-        }
+        if (priority) {
+            if (!queuedMetadata.add(track)) {
+                pendingMetadata.remove(track);
+            }
 
-        readNextMetadata();
+            pendingMetadata.addFirst(track);
+        } else if (queuedMetadata.add(track)) {
+            pendingMetadata.addLast(track);
+        }
     }
 
     private void readNextMetadata() {
@@ -331,15 +377,19 @@ public class LibraryService implements AutoCloseable {
         Track track = pendingMetadata.pollFirst();
 
         if (track == null) {
+            writeNextFiles();
             return;
         }
 
+        queuedMetadata.remove(track);
         File file = track.getFile();
+        Path path = file.toPath();
+        CachedMetadata cached = metadataCache.get(path);
 
-        Task<TrackMetadata> task = new Task<>() {
+        Task<MetadataReadResult> task = new Task<>() {
             @Override
-            protected TrackMetadata call() throws Exception {
-                return metadataService.read(file);
+            protected MetadataReadResult call() throws Exception {
+                return readMetadata(file, cached);
             }
         };
 
@@ -351,7 +401,14 @@ public class LibraryService implements AutoCloseable {
                 return;
             }
 
-            track.setMetadata(task.getValue());
+            MetadataReadResult result = task.getValue();
+            metadataCache.put(path, result.cached());
+            track.setMetadata(result.cached().metadata());
+
+            if (result.freshRead()) {
+                queueMetadataSave(file, result.cached());
+            }
+
             finishMetadataRead();
         });
 
@@ -360,7 +417,12 @@ public class LibraryService implements AutoCloseable {
                 return;
             }
 
+            metadataCache.remove(path);
+            track.setMetadata(new TrackMetadata(
+                    file.getName(), "Unknown artist", "Unknown album"
+            ));
             track.markMetadataFailed();
+            queueMetadataSave(file, null);
 
             System.err.println(
                     "Metadata read failed for " + file
@@ -374,6 +436,70 @@ public class LibraryService implements AutoCloseable {
 
         if (!closed) {
             metadataExecutor.execute(task);
+        }
+    }
+
+    private MetadataReadResult readMetadata(File file, CachedMetadata cached)
+            throws Exception {
+        BasicFileAttributes before = readFileAttributes(file);
+
+        if (cached != null
+                && cached.fileSize() == before.size()
+                && cached.modifiedTime().equals(before.lastModifiedTime().toString())) {
+            return new MetadataReadResult(cached, false);
+        }
+
+        // Retry once if a tag editor changes/replaces the file during parsing.
+        for (int attempt = 0; attempt < 2; attempt++) {
+            TrackMetadata metadata = metadataService.read(file);
+            BasicFileAttributes after = readFileAttributes(file);
+
+            if (before.size() == after.size()
+                    && before.lastModifiedTime().equals(after.lastModifiedTime())
+                    && Objects.equals(before.fileKey(), after.fileKey())) {
+                return new MetadataReadResult(new CachedMetadata(
+                        metadata, after.size(), after.lastModifiedTime().toString()
+                ), true);
+            }
+
+            before = after;
+        }
+
+        throw new IOException("The file kept changing while its tags were read. "
+                + "Select or reimport it after the edit finishes.");
+    }
+
+    private static BasicFileAttributes readFileAttributes(File file) throws IOException {
+        BasicFileAttributes attributes = Files.readAttributes(
+                file.toPath(), BasicFileAttributes.class
+        );
+
+        if (!attributes.isRegularFile()) {
+            throw new IOException("Track path is not a regular file: " + file);
+        }
+
+        return attributes;
+    }
+
+    private void queueMetadataSave(File file, CachedMetadata cached) {
+        if (!persistenceEnabled) {
+            return;
+        }
+
+        pendingDatabaseMetadata.put(file.toPath(), new SavedTrack(file, cached));
+
+        // Coalesce tag results during a longer import; the final result or close
+        // flushes a smaller batch as well. Paths themselves are saved immediately.
+        if (pendingDatabaseMetadata.size() >= 32 || pendingMetadata.isEmpty()) {
+            writeNextFiles();
+        }
+    }
+
+    private static void retainMetadataChanges(
+            Map<Path, SavedTrack> destination, List<SavedTrack> changes
+    ) {
+        for (SavedTrack change : changes) {
+            destination.put(change.file().toPath(), change);
         }
     }
 
@@ -477,8 +603,10 @@ public class LibraryService implements AutoCloseable {
 
         closed = true;
         pendingMetadata.clear();
+        queuedMetadata.clear();
+        metadataCache.clear();
 
-        Task<TrackMetadata> task = metadataTask;
+        Task<MetadataReadResult> task = metadataTask;
         metadataTask = null;
         readingTrack = null;
 
@@ -506,18 +634,24 @@ public class LibraryService implements AutoCloseable {
 
         finalFiles.addAll(activeDatabaseFiles);
         finalFiles.addAll(pendingDatabaseFiles);
+        Map<Path, SavedTrack> finalMetadata = new LinkedHashMap<>();
+        retainMetadataChanges(finalMetadata, activeDatabaseMetadata);
+        retainMetadataChanges(finalMetadata, List.copyOf(pendingDatabaseMetadata.values()));
         pendingDatabaseFiles.clear();
+        pendingDatabaseMetadata.clear();
         restoreTask = null;
         saveTask = null;
         activeDatabaseFiles = List.of();
+        activeDatabaseMetadata = List.of();
         savingLibrary.set(false);
         restoringLibrary.set(false);
 
-        if (persistenceEnabled && !finalFiles.isEmpty()) {
+        if (persistenceEnabled && (!finalFiles.isEmpty() || !finalMetadata.isEmpty())) {
             List<File> finalBatch = List.copyOf(finalFiles);
+            List<SavedTrack> finalMetadataBatch = List.copyOf(finalMetadata.values());
             databaseExecutor.execute(() -> {
                 try {
-                    libraryRepository.addFiles(finalBatch);
+                    libraryRepository.saveChanges(finalBatch, finalMetadataBatch);
                 } catch (Exception error) {
                     System.err.println(
                             "Final library save failed for " + getLibraryDatabasePath()

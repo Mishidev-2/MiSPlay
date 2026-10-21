@@ -4,7 +4,7 @@
 
 MiSPlay is a personal Windows 11 desktop project developed in small, working increments. Each increment should have a clear behavior to verify. Keep the architecture understandable and add dependencies when a feature needs them.
 
-The current checkpoint includes MP3 playback, captured queues with repeat/shuffle, saved library paths and order, background metadata loading, folder importing and embedded album artwork. SQLite stores paths only; persistent metadata caching with file-change detection is next. Lyrics, tray/overlay behavior, updates and Windows packaging remain future work.
+The current checkpoint includes MP3 playback, captured queues with repeat/shuffle, saved library paths/order and text metadata, background cache validation, folder importing and embedded album artwork. SQLite schema 2 caches title, artist and album with file size/modification time. Saved playback preferences are the next proposed checkpoint. Lyrics, tray/overlay behavior, updates and Windows packaging remain future work.
 
 ## Current architecture
 
@@ -12,8 +12,8 @@ The current checkpoint includes MP3 playback, captured queues with repeat/shuffl
 | --- | --- | --- |
 | `MiSPlayApp` | Controls, bindings, file/folder choosers, playback actions, service instances and shutdown coordination | Audio decoding, tag parsing or database storage |
 | `AudioService` | The current `MediaPlayer`, playback/seek/volume requests, callbacks, audio errors and disposal | Library imports, UI controls or metadata/artwork caching |
-| `LibraryService` | Observable tracks, normalized-path lookup, metadata/folder workers, restore/save scheduling and storage status | Audio playback, artwork caching or SQL execution |
-| `LibraryRepository` | Database location/schema, ordered saved paths and transactional path inserts | JavaFX models/controls, worker scheduling, metadata or audio bytes |
+| `LibraryService` | Observable tracks, normalized-path lookup, metadata validation/cache, metadata/folder workers, restore/save scheduling and storage status | Audio playback, artwork caching or SQL execution |
+| `LibraryRepository` | Database location/schema/migration, ordered paths/cached tags and transactional path/cache writes | JavaFX models/controls, worker scheduling, tag parsing or audio bytes |
 | `Track` | A file, observable metadata/status and normalized search matching | File reading, worker scheduling or controls |
 | `TrackMetadata` | Immutable title, artist and album strings | Parser objects, artwork or loading state |
 | `MetadataStatus` | PENDING, LOADING, LOADED and FAILED states | Worker execution or persistence |
@@ -24,34 +24,46 @@ The current checkpoint includes MP3 playback, captured queues with repeat/shuffl
 | `PlaybackQueue` | Captured original/active orders, position, navigation, repeat and shuffle rules | Controls, audio resources or file reading |
 | `RepeatMode` | OFF, ALL and ONE choices | Queue navigation or playback execution |
 
+`LibraryRepository` also declares two nested transfer records: `CachedMetadata` contains a `TrackMetadata`, file size and modification-time string; `SavedTrack` contains a file and optional cache. A null cache represents a cache miss when loading or a request to clear cached fields when saving.
+
 ### Startup and saved library
 
 `MiSPlayApp` shows the window, then calls `LibraryService.restoreLibrary()` once. Loading runs on a dedicated database worker. Open MP3, Add MP3s and Add Folder stay disabled until restoration finishes; the list placeholder and storage row show loading status.
 
 `LibraryRepository.defaultDatabasePath()` uses `%LOCALAPPDATA%\MiSPlay\library.db`, falling back to `.misplay/library.db` under Java's `user.home` when `LOCALAPPDATA` is missing or blank. Its constructor normalizes the path without touching the disk. Opening a connection creates the parent directory and database when needed. No separate SQLite server or `module-info.java` is required; Maven supplies `sqlite-jdbc` 3.53.4.0 and runtime `slf4j-nop` 1.7.36. The launcher's native-access option includes `ALL-UNNAMED` for the JDBC dependency.
 
-Schema version 1 is recorded with `PRAGMA user_version`. The path table is:
+Schema version 2 is recorded with `PRAGMA user_version`. Startup upgrades schema 1 transactionally by adding six nullable columns without replacing saved paths or IDs. A new database is initialized through the same path. The resulting table is:
 
 ```sql
 CREATE TABLE IF NOT EXISTS library_tracks (
     id INTEGER PRIMARY KEY,
-    path TEXT NOT NULL UNIQUE
+    path TEXT NOT NULL UNIQUE,
+    title TEXT,
+    artist TEXT,
+    album TEXT,
+    file_size INTEGER,
+    modified_time TEXT,
+    metadata_version INTEGER
 );
 ```
 
-Loading reads paths with `ORDER BY id`, validates that each path is absolute and returns normalized files. It does not check file existence, delete missing paths or start playback. On the JavaFX thread, `LibraryService` registers the restored files as new Track models and schedules their metadata reads without inserting the saved paths again. The original insertion order becomes the library order; filesystem traversal order is not guaranteed for a newly imported folder.
+Metadata-cache format version 1 is separate from database schema version 2. Bump the cache-format constant when tag interpretation or fallback rules change, so older results become misses. Missing fields, negative sizes and unsupported cache-format versions are treated as uncached metadata rather than rejecting the saved paths.
 
-An initial restore failure disables saving for that launch, displays a status message and still enables temporary imports/playback. An unreadable/corrupt database or a schema version above 1 is not silently reset or replaced. The user must fix the storage problem and restart to retry restoration. Missing paths remain saved even if metadata or audio loading fails.
+Loading reads paths/caches with `ORDER BY id`, validates that each path is absolute and returns normalized files. The repository does not check file existence or start playback. On the JavaFX thread, `LibraryService` registers restored files as new Track models and schedules background cache checks without inserting those paths again. The original insertion order becomes the library order; filesystem traversal order is not guaranteed for a newly imported folder.
+
+An initial restore/migration failure disables saving for that launch, displays a status message and still enables temporary imports/playback. An unreadable/corrupt database or a schema version above 2 is not silently reset or replaced. The user must fix the storage problem and restart to retry restoration. Missing paths remain saved even if metadata or audio loading fails. Keep a database backup before upgrading; schema-1 application code cannot open schema 2.
 
 ### Saving imported paths
 
-After restoration, `addFiles` registers new normalized paths on the JavaFX thread, schedules metadata and queues only newly added paths for saving. Known paths retain their existing Track identity and do not generate duplicate inserts. Successful folder imports use the same path.
+After restoration, `addFiles` registers new normalized paths on the JavaFX thread, schedules metadata checks and queues only newly added paths for insertion. Known paths retain their Track identity and receive a deduplicated recheck without duplicate inserts. Successful folder imports use the same path.
 
-One database task runs at a time. An insertion-ordered pending set coalesces new paths while a batch is active. The repository opens/closes a connection per operation, uses a three-second SQLite busy timeout and inserts each batch in one transaction with prepared parameters and `ON CONFLICT(path) DO NOTHING`. SQL failures roll back the batch. This checkpoint is append-only: there is no removal or full-library snapshot replacement.
+One database task runs at a time. An insertion-ordered pending set coalesces new paths while a batch is active. A pending metadata map retains the latest result or clear request for each path. Tag results can coalesce until 32 pending changes or the end of the metadata queue; imports, save completion and normal close can also flush smaller batches.
 
-The storage row shows restoration/saving activity. A failed write returns its files to the front of the waiting batch, sets the save-failed property and pauses automatic writes. New imports can still join the pending set. Retry save clears the failure state and attempts the pending paths again. Import, search and playback continue while saves run.
+The repository opens/closes a connection per operation and uses a three-second SQLite busy timeout. `saveChanges` inserts new paths with prepared parameters and `ON CONFLICT(path) DO NOTHING`, then updates cached columns by path in the same transaction. Cache updates never reorder existing paths. SQL failures or an update for an unknown path roll back the whole batch. Library membership remains append-only; there is no removal or full-library snapshot replacement.
 
-Only paths and insertion order are persisted. Metadata strings, loading status, artwork, queue position/order and playback settings are rebuilt or reset each launch. Normal close attempts to finish pending writes; forced termination or an unresolved database failure can leave imports unsaved.
+The storage row shows restoration/saving activity. A failed write restores its paths and metadata changes to pending state, sets the save-failed property and pauses automatic writes. New imports/results can still join the pending work. When an older failed cache write and a newer waiting result share a path, the newer value wins. Retry save clears the failure state and attempts pending changes again. Import, search and playback continue while saves run.
+
+Paths, insertion order and valid title/artist/album caches persist. Loading status, artwork, queue position/order and playback settings are rebuilt or reset each launch. Normal close attempts to finish accepted writes; forced termination or an unresolved database failure can leave paths/cache updates unsaved.
 
 ### Opening a track
 
@@ -161,7 +173,7 @@ The completion callback remains registered when individual players are replaced.
 
 The source list uses an extractor observing each track's `metadataProperty()`, so metadata changes produce list-update events.
 
-A `ListView<Track>` displays filtered entries through reusable cells with a fixed height of 32 pixels. Each populated cell binds its text to metadata and displays title â€” artist. Pending tracks use filename and Unknown artist fallbacks until their background read finishes; small files may update too quickly to observe the fallback.
+A `ListView<Track>` displays filtered entries through reusable cells with a fixed height of 32 pixels. Each populated cell binds its text to metadata and displays title — artist. Pending tracks use filename and Unknown artist fallbacks until their background read finishes; small files may update too quickly to observe the fallback.
 
 When a cell is reused, `updateItem` unbinds its text, disposes of its previous binding and clears empty-cell content before binding to another Track. Cell rendering uses in-memory values and does not read tags or decode artwork.
 
@@ -187,31 +199,33 @@ Missing or blank titles fall back to the filename. Missing artists and albums us
 
 The service returns a `TrackMetadata` record containing strings and does not retain parser objects. `ArtworkService` reads embedded artwork separately and caches resized image pixels.
 
-`LibraryService` automatically schedules metadata reads when tracks are restored or newly imported. Library rows and search results update as reads finish, without requiring playback.
+`LibraryService` automatically schedules metadata validation when tracks are restored or imported. Unchanged cached files skip parsing; misses and changed files use `MetadataService`. Library rows and search results update as results arrive, without requiring playback.
 
 The shared `playFile` action calls `loadMetadata`, covering Open MP3, row activation, manual navigation and automatic queue advancement.
 
 `loadMetadata` releases the previous label bindings and binds the now-playing labels to the selected Track's metadata and loading status. Cached metadata appears immediately. Pending tracks display their filename fallback and `Waiting for tags...` or `Reading tags...` as appropriate.
 
-Selecting a track asks `LibraryService` to prioritize its pending read after the current read finishes. Completed reads update their own Track objects; labels observe only the selected Track, so another result cannot replace the current song's details.
+Requesting playback asks `LibraryService` to prioritize a metadata check after the current check/read finishes, including for loaded or failed Tracks. This catches edits or repaired files. Completed results update their own Track objects; labels observe only the selected Track, so another result cannot replace the current song's details. Already displayed values can remain visible while revalidation is pending.
 
-Read failures retain the fallback values, show `Tags unavailable â€” showing filename.` for the selected track and log the exception independently of audio errors.
+Check/read failures replace stale text with filename/Unknown fallbacks, mark the Track FAILED, queue a stored-cache clear and show `Tags unavailable — showing filename.` for the selected track. Exceptions are logged independently of audio errors.
 
 Known issue: Yaezakura displays a shortened artist/details line even though Windows Properties lists artist and album information. The cause remains undiagnosed and investigation is deferred.
 
-### Session metadata cache
+### Persistent metadata cache
 
-`LibraryService` maintains a map from normalized absolute paths to Track objects. Reimporting a known path preserves its model and cached values without scheduling another metadata read.
+`LibraryService` maintains normalized-path maps for Track identity and cached metadata, plus a waiting deque/set that deduplicate requests. Reimporting a known path preserves its model and queues a check. Playback requests move a waiting check to the front; requesting the currently active Track does not enqueue another concurrent read.
 
-A new Track contains filename and Unknown artist/album fallbacks. Its observable status starts as PENDING and progresses through LOADING to either LOADED or FAILED. `isMetadataLoaded()` returns true only for LOADED.
+A new Track contains filename and Unknown artist/album fallbacks. Its status starts PENDING and progresses through LOADING to LOADED or FAILED. Revalidation can move an existing model through LOADING again. `isMetadataLoaded()` returns true only for LOADED.
 
-A successful read calls `Track.setMetadata` on the JavaFX Application Thread. This marks metadata as loaded, stores the result and notifies listeners. Successful reads with missing tags also cache their fallback values.
+The metadata worker reads `BasicFileAttributes`, rejects non-regular files and compares size plus `lastModifiedTime().toString()` with the cache. Full timestamp text avoids deliberately truncating available precision to milliseconds. A match returns cached strings without calling the tag parser. Restored cache values are applied to Track properties only after this background validation.
 
-Switching songs does not cancel metadata reads. A completed result remains useful on its corresponding Track even if that song is no longer playing.
+A miss reads tags, then checks size, modification time and file identity where available against the attributes captured before parsing. If they changed, it retries the read once using the newer attributes. Continued changes produce a failure instead of caching an unstable result. There is no file lock or full-file hash.
 
-A failed read marks the Track FAILED, logs the error and allows the next waiting read to proceed. Failed reads are not automatically retried during the current launch; duplicate imports do not reschedule them.
+A successful validation/read calls `Track.setMetadata` on the JavaFX Application Thread. Fresh reads also queue persistence; pure cache hits do not rewrite the database. Successful reads with missing tags cache their fallback values. Switching songs does not cancel a read; its result remains useful on its own Track.
 
-This cache contains metadata strings for restored/imported tracks and lasts for the current library session. It does not persist across launches or detect file edits. Restoring saved paths schedules fresh reads automatically; reimporting or playing a track is not required. Its lifetime and size policy differ from the eight-entry artwork cache.
+A failed check/read clears the in-memory result, queues nullable database fields, uses fallback text and lets the next waiting Track proceed. The path remains a member. Selecting the file for playback or reimporting it explicitly retries after repair; failures do not trigger an automatic retry loop. Database clears/updates still depend on successful saving.
+
+Validation runs on startup, playback requests and reimport. It does not continuously watch files. An edit preserving size and modification time can evade detection. Artwork remains a separate session cache with no equivalent validation; its old cover can survive until eviction or restart. Metadata and artwork can still perform separate tag reads for the selected song.
 
 ### Folder importing
 
@@ -251,10 +265,10 @@ JavaFX controls, observable library collections, Track properties, playback queu
 
 | Work | Owner | Background operation | Result applied on JavaFX thread |
 | --- | --- | --- | --- |
-| Metadata | `LibraryService` | One `Task<TrackMetadata>` reads a captured file through `MetadataService`. | Update that Track's metadata/status and start the next waiting read. |
+| Metadata | `LibraryService` | One `Task<MetadataReadResult>` validates attributes and reuses cached strings or calls `MetadataService`. | Update that Track/cache/status, queue fresh/cleared metadata for saving and start the next check. |
 | Folder scan | `LibraryService` | One `FolderScanTask` traverses folders and collects paths/counts. | Import a successful result or display cancellation/failure without adding partial results. |
 | Artwork | `ArtworkService` | One `Task<Image>` reads, resizes and copies an embedded cover. | Update the bounded cache and display only a result for the selected path. |
-| Database | `LibraryService` schedules `LibraryRepository` | One worker serializes startup loading and transactional path inserts. | Register restored Tracks, update storage status and schedule the next waiting save. |
+| Database | `LibraryService` schedules `LibraryRepository` | One worker serializes migration, path/cache loading and transactional inserts/updates. | Register restored Tracks/cache candidates, update storage status and schedule the next save. |
 
 These operations use separate single-thread executors. Background tasks return data without manipulating live controls or the observable library.
 
@@ -268,15 +282,19 @@ Artwork closing clears its current-task reference, waiting path and cache, reque
 
 Metadata, scanner and artwork workers are daemon threads. Cancellation is a request; closed/task-identity checks prevent late completions from updating the UI, including a database restore completing after close.
 
-The database worker is deliberately non-daemon. Closing does not cancel accepted database tasks. When persistence is enabled, it also queues a final save containing active and waiting paths, then calls `shutdown()` so the worker drains before the JVM exits. Repeated inserts are harmless because paths are unique. This final attempt also includes paths from a failed save; a further failure is logged and is not claimed as saved. Shutdown does not wait on the JavaFX thread. A locked database can delay process exit while the background write reaches its timeout; a forced stop bypasses this guarantee.
+The database worker is deliberately non-daemon. Closing does not cancel accepted database tasks. When persistence is enabled, it queues a final save containing active/waiting paths and completed metadata changes, keeping the newest pending cache value per path, then calls `shutdown()` so the worker drains before JVM exit. Repeated path inserts are harmless because paths are unique. This final attempt also includes changes from a failed save; a further failure is logged and is not claimed as saved. Unfinished/cancelled metadata reads are not promised to be cached; saved paths can be read on the next launch. Shutdown does not wait on the JavaFX thread. A locked database can delay exit until its background timeout; a forced stop bypasses normal draining.
 
 ## Verification status
 
 The developer has reported working playback/library metadata, folder importing, embedded artwork and SQLite library-path checkpoints. Per-ID Windows results for the complete checklist below have not been recorded; the rows describe checks to run, not a blanket pass claim.
 
+The current application was reported working after the metadata-cache handoff. Individual migration/cache scenarios have not been recorded as Windows passes.
+
 Development-time headless artwork checks used generated MP3 fixtures and covered JPEG/PNG resizing, Unicode filenames, cache reuse and eviction, missing/damaged covers, invalid-file recovery, rapid selection changes, obsolete-result handling and shutdown. A separate layout check used substitutes for the existing services. These checks do not establish a full build or audio regression result for the Windows project.
 
 SQLite development checks used the real 3.53.4.0 driver. Twelve repository checks covered database creation/restart, Unicode/apostrophes, normalization/duplicates/order, missing paths, transactional rollback, a 1,000-path batch, newer-schema rejection, corrupt bytes and an invalid storage directory. Twenty-one library-coordination checks covered restoration, save batching/retry, responsiveness under a database lock, folder import/cancellation, failed-restore session use, close during restore and normal-close flushing. A child JavaFX process exited with saves queued, and the parent verified its saved paths. Seven UI checks covered import bindings, storage/retry controls, restored rows, no automatic playback and layout.
+
+The metadata-cache checkpoint added 30 focused checks: migration/rollback and retained IDs/order, Unicode/quotes, invalid cache data/version, atomic path/cache writes, restart cache hits verified through parser-call counts, time-only and size-only invalidation, submillisecond timestamps, playback/reimport refresh, missing/repaired files, bounded reads during concurrent edits, database locks, newest-result retry/close behavior, fallback caching and an 80-track batch. Those 30 and the existing 40 repository/library/UI checks passed together.
 
 Those persistence checks ran with JDK 17 and JavaFX 21.0.1. Production repository, LibraryService and application code were exercised with API substitutes for unchanged model/audio/metadata/folder components where full source was unavailable. They are separate development harnesses, not a committed test suite or proof of the complete Java 25/JavaFX 25.0.2 Windows application. Local Windows playback verification remains necessary for later changes.
 
@@ -371,15 +389,15 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M77 | Play songs with Unicode tags. | Japanese, Korean and Chinese text displays correctly. |
 | M78 | Use pause, seeking, volume, repeat and shuffle after metadata loads. | Playback controls continue working. |
 | M79 | Close the application. | Audio stops and the application exits. |
-| M80 | Import A and B, wait for their metadata, play both, then return to A. | Returning to A uses its cached metadata without another metadata task. |
+| M80 | Import A and B, wait for their metadata, play both, then return to unchanged A. | A background attribute check can run; cached tags are reused without another parser call. |
 | M81 | Open an already cached file again using Open MP3. | Its existing model and metadata are preserved without creating a duplicate library entry. |
-| M82 | Let a cached song finish with Repeat ONE enabled. | Audio restarts without another metadata read. |
+| M82 | Let an unchanged cached song finish with Repeat ONE enabled. | Audio restarts; attribute validation can run without reparsing its tags. |
 | M83 | Quickly switch from an uncached song to a cached song. | The cached song's details remain displayed; an older result cannot overwrite them. |
 | M84 | Start another queue containing previously cached tracks. | Cached metadata remains available across queue changes. |
 | M85 | Exercise navigation, library search, volume, seeking, repeat and shuffle. | Existing playback and library behavior continues working. |
-| M86 | Restart with a previously cached file already saved, without reimporting or playing it. | Its path is restored and its metadata is read again automatically in the new session. |
-| M87 | Import new unplayed tagged tracks after restoration finishes. | Pending rows can show filename â€” Unknown artist, then update automatically without playback; small files may load too quickly to see the fallback. |
-| M88 | Play a tagged song whose metadata is cached or still pending. | The row and now-playing labels use its metadata when available; cached values require no new read. |
+| M86 | Restart with an unchanged successfully cached file already saved, without reimporting or playing it. | Its path is restored; background validation reuses saved metadata without tag parsing. |
+| M87 | Import new unplayed tagged tracks after restoration finishes. | Pending rows can show filename — Unknown artist, then update automatically without playback; small files may load too quickly to see the fallback. |
+| M88 | Play a tagged song whose metadata is cached or still pending. | The row and now-playing labels use its metadata; unchanged cached values require an attribute check but no tag parse. |
 | M89 | Search a cached track by filename, title, artist and album. | Each field matches; case differences, surrounding whitespace and clearing the query work. |
 | M90 | Keep an artist query active and use Open MP3 on a new song by that artist. | Its row appears once metadata becomes available without editing the query. |
 | M91 | During a pending batch, search Unknown artist and activate a waiting track that has an embedded artist. | Its row leaves those results after metadata loads; playback continues. |
@@ -391,7 +409,7 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M97 | Search a known artist or album while a larger batch is still loading. | Matching entries appear as tags finish loading without retyping the query. |
 | M98 | Play a still-pending song near the end of an import batch. | Its read moves ahead of other waiting reads after the current read finishes. |
 | M99 | Skip quickly while metadata is loading. | Now-playing labels follow the actual selected song; other completions update only their own Tracks. |
-| M100 | Add more songs during metadata loading and reimport known files. | New files are scheduled; known paths keep their model/status without duplicate entries or reads. |
+| M100 | Add more songs during metadata loading and reimport known files. | New files are scheduled; known paths keep their model identity and receive deduplicated checks without duplicate rows or parsing unchanged tags. |
 | M101 | Import an empty bad-tags.mp3 with valid files using Add MP3s, without playing the invalid file. | A metadata error is logged for that file, fallback values remain and valid files continue loading. |
 | M102 | Close while metadata is still loading, then reopen. | No late UI updates occur; accepted imported paths are saved by normal shutdown when storage is writable and are restored next launch. |
 | M103 | Import nested folders with Unicode names, mixed-case .mp3 extensions and unrelated files. | Regular MP3 files are found in all levels; unrelated files are ignored. |
@@ -423,7 +441,19 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M129 | In a disposable harness, make a path insert fail, queue another import, remove the failure and press Retry save. | Failure status/Retry appear, pending paths are retained, playback/imports continue and the successful retry saves both batches in order. |
 | M130 | Launch a disposable harness with an unreadable/corrupt or newer-schema database, then import a file. | Loading fails visibly; temporary imports/playback remain available, saving stays disabled and the existing database is not reset. |
 | M131 | Close a disposable harness while initial restoration is still pending. | No late model/UI changes or errors occur; the accepted database task finishes and the process exits. |
-| M132 | Change volume/repeat/shuffle and play covered tracks, then close normally and relaunch. | Saved paths/order return; volume resets to 50%, repeat/shuffle to OFF, metadata is reread and artwork is loaded only when a song is selected for playback. |
+| M132 | Change volume/repeat/shuffle and play covered tracks, then close normally and relaunch. | Saved paths/order and valid text metadata return after validation; volume resets to 50%, repeat/shuffle to OFF and artwork loads only for playback requests. |
+| M133 | Upgrade a disposable schema-1 database containing known paths/IDs. | Schema becomes 2; paths, IDs and order remain, cache columns start empty and successful tag results are saved. |
+| M134 | Fill caches, close normally, relaunch unchanged files and inspect parser calls with a debugger/harness. | Background attribute validation restores text metadata/search without calling the tag parser for those files. |
+| M135 | Close, change tags on a disposable saved MP3, then relaunch. | Changed size or modification time triggers a fresh read and updates the row/search before playback is required. |
+| M136 | In a disposable fixture harness, test same-size/time-only edits and size-only edits with unchanged time. | Either changed attribute invalidates cached text; available submillisecond timestamp differences are retained. |
+| M137 | Edit a loaded file, then reimport it or request playback. | One Track/row remains; a deduplicated background check refreshes changed tags and search while the captured queue stays intact. |
+| M138 | Move a disposable cached file away, request playback/reimport, restore it and request again. | The path remains; failure uses fallback text and queues a cache clear, then explicit retry reads repaired metadata in the same launch. |
+| M139 | In a disposable fixture, make tag parsing fail after a previously cached file changes. | Track becomes FAILED, stale strings clear, a stored-cache clear is queued and other files continue; no automatic failure loop occurs. |
+| M140 | In a controlled harness, edit a file during parsing once, then on both attempts. | One changed read is retried; repeated changes stop after the second attempt without caching an unstable result. |
+| M141 | Block/fail an older metadata save while a newer result for the same path is pending, then Retry save. | Controls remain responsive; the newer value wins and successful saving clears the failure state. |
+| M142 | With active/waiting metadata updates, close normally using a writable disposable database. | Accepted writes drain and the final flush stores the newest completed result; unfinished reads can be rebuilt next launch. |
+| M143 | In a disposable database, use an unsupported metadata-cache version or incomplete cache fields, then relaunch. | Paths still restore; invalid cached text becomes a miss and successful fresh tags replace it. |
+| M144 | Import an untagged but readable MP3, let its fallbacks save, then relaunch unchanged. | Filename/Unknown fallbacks are reused after validation without another tag parse. |
 
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
@@ -456,16 +486,16 @@ type: short description of the resulting behavior
 | `test` | Add meaningful verification |
 
 
-The SQLite checkpoint can use `feat: persist imported library paths with SQLite` when its code and documentation are committed together. If the feature code is already committed and only these documentation updates remain, use `docs: document SQLite library persistence`.
+The metadata-cache checkpoint can use `feat: cache track metadata with file change detection` when its two changed Java files and documentation are committed together. If the feature code is already committed and only documentation remains, use `docs: document persistent metadata caching`.
 
 For later checkpoints, update `CHANGELOG.md` when functionality changes. Update the README for changed features, prerequisites or run instructions. Update this guide when responsibilities, workflows or verification change. Do not invent documentation changes just to fill a checklist.
 
 ## Upcoming implementation notes
 
-- Extend the path-only SQLite schema with cached metadata and file-change detection, then add preferences and playlist relationships in later checkpoints.
+- Add saved playback preferences next, followed by playlist relationships in later checkpoints.
 - Keep database work and expensive file/image operations off the JavaFX Application Thread, applying observable-model changes on that thread.
 - Preserve stable Track identity and captured playback-queue behavior while adding persistence.
-- Define refresh/invalidation for edited, moved, deleted and temporarily unavailable files, including both metadata and artwork caches.
+- Extend refresh/invalidation to artwork and path repair; text metadata already validates size/time on startup, playback requests and reimport.
 - Keep tag reading and artwork decoding out of virtualized cell updates.
 - Record a Windows process-memory/CPU baseline before making optimization claims.
 
