@@ -2,6 +2,7 @@ package com.misplay.persistence;
 
 import com.misplay.model.TrackMetadata;
 import com.misplay.model.PlaybackPreferences;
+import com.misplay.model.Playlist;
 import com.misplay.model.RepeatMode;
 
 import java.io.File;
@@ -16,11 +17,14 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Objects;
 
 /** Blocking database operations. Call these methods on the database worker. */
 public final class LibraryRepository {
-    private static final int SCHEMA_VERSION = 3;
+    private static final int SCHEMA_VERSION = 4;
     // Bump this when tag interpretation or fallback rules change.
     private static final int METADATA_CACHE_VERSION = 1;
     private final Path databasePath;
@@ -48,11 +52,15 @@ public final class LibraryRepository {
         }
     }
 
-    /** Paths, caches and preferences read together before startup is unlocked. */
-    public record LibraryState(List<SavedTrack> tracks, PlaybackPreferences preferences) {
+    /** Paths, caches, preferences and playlists read before startup is unlocked. */
+    public record LibraryState(
+            List<SavedTrack> tracks, PlaybackPreferences preferences,
+            List<Playlist> playlists
+    ) {
         public LibraryState {
             tracks = List.copyOf(tracks);
             Objects.requireNonNull(preferences);
+            playlists = List.copyOf(playlists);
         }
     }
 
@@ -91,8 +99,9 @@ public final class LibraryRepository {
             try {
                 List<SavedTrack> entries = readTracks(connection);
                 PlaybackPreferences preferences = readPreferences(connection);
+                List<Playlist> playlists = readPlaylists(connection);
                 connection.commit();
-                return new LibraryState(entries, preferences);
+                return new LibraryState(entries, preferences, playlists);
             } catch (SQLException | RuntimeException error) {
                 rollback(connection, error);
                 throw error;
@@ -186,7 +195,16 @@ public final class LibraryRepository {
             List<File> files, List<SavedTrack> metadataChanges,
             PlaybackPreferences preferences
     ) throws IOException, SQLException {
-        if (files.isEmpty() && metadataChanges.isEmpty() && preferences == null) {
+        saveChanges(files, metadataChanges, preferences, null);
+    }
+
+    /** Null playlists preserves them; an empty snapshot deletes all playlists. */
+    public void saveChanges(
+            List<File> files, List<SavedTrack> metadataChanges,
+            PlaybackPreferences preferences, List<Playlist> playlists
+    ) throws IOException, SQLException {
+        if (files.isEmpty() && metadataChanges.isEmpty()
+                && preferences == null && playlists == null) {
             return;
         }
 
@@ -270,10 +288,122 @@ public final class LibraryRepository {
                     }
                 }
 
+                if (playlists != null) {
+                    savePlaylists(connection, playlists);
+                }
+
                 connection.commit();
             } catch (SQLException | RuntimeException error) {
                 rollback(connection, error);
                 throw error;
+            }
+        }
+    }
+
+    private static List<Playlist> readPlaylists(Connection connection)
+            throws SQLException {
+        Map<String, String> names = new LinkedHashMap<>();
+        Map<String, List<File>> members = new LinkedHashMap<>();
+
+        try (Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery(
+                     "SELECT id, name FROM playlists ORDER BY position"
+             )) {
+            while (rows.next()) {
+                String id = rows.getString("id");
+
+                if (id == null || names.containsKey(id)) {
+                    throw new SQLException("Saved playlists contain an invalid ID.");
+                }
+
+                names.put(id, rows.getString("name"));
+                members.put(id, new ArrayList<>());
+            }
+        }
+
+        try (Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery(
+                     """
+                     SELECT entry.playlist_id, track.path
+                     FROM playlist_entries entry
+                     LEFT JOIN library_tracks track ON track.id = entry.track_id
+                     ORDER BY entry.playlist_id, entry.position
+                     """
+             )) {
+            while (rows.next()) {
+                List<File> files = members.get(rows.getString("playlist_id"));
+                String storedPath = rows.getString("path");
+
+                if (files == null || storedPath == null) {
+                    throw new SQLException("A saved playlist refers to a missing library row.");
+                }
+
+                Path path = Path.of(storedPath);
+
+                if (!path.isAbsolute()) {
+                    throw new SQLException("A saved playlist contains a relative path.");
+                }
+
+                // A missing file on disk still belongs to the playlist.
+                files.add(path.normalize().toFile());
+            }
+        }
+
+        List<Playlist> playlists = new ArrayList<>();
+
+        try {
+            for (Map.Entry<String, String> entry : names.entrySet()) {
+                playlists.add(new Playlist(
+                        entry.getKey(), entry.getValue(), members.get(entry.getKey())
+                ));
+            }
+        } catch (IllegalArgumentException | NullPointerException error) {
+            throw new SQLException("Saved playlist data is invalid.", error);
+        }
+
+        return List.copyOf(playlists);
+    }
+
+    private static void savePlaylists(Connection connection, List<Playlist> playlists)
+            throws SQLException {
+        // Replace just the playlist snapshot in this transaction. Library rows,
+        // their stable IDs, metadata and the captured playback queue are untouched.
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("DELETE FROM playlist_entries");
+            statement.executeUpdate("DELETE FROM playlists");
+        }
+
+        try (PreparedStatement insertPlaylist = connection.prepareStatement(
+                "INSERT INTO playlists(id, name, position) VALUES (?, ?, ?)"
+        ); PreparedStatement insertEntry = connection.prepareStatement(
+                """
+                INSERT INTO playlist_entries(playlist_id, track_id, position)
+                SELECT ?, id, ? FROM library_tracks WHERE path = ?
+                """
+        )) {
+            var ids = new HashSet<String>();
+
+            for (int playlistIndex = 0; playlistIndex < playlists.size(); playlistIndex++) {
+                Playlist playlist = playlists.get(playlistIndex);
+
+                if (!ids.add(playlist.id())) {
+                    throw new SQLException("Duplicate playlist ID in a save snapshot.");
+                }
+
+                insertPlaylist.setString(1, playlist.id());
+                insertPlaylist.setString(2, playlist.name());
+                insertPlaylist.setInt(3, playlistIndex);
+                insertPlaylist.executeUpdate();
+
+                for (int trackIndex = 0; trackIndex < playlist.files().size(); trackIndex++) {
+                    insertEntry.setString(1, playlist.id());
+                    insertEntry.setInt(2, trackIndex);
+                    insertEntry.setString(3, playlist.files().get(trackIndex).toString());
+
+                    if (insertEntry.executeUpdate() != 1) {
+                        throw new SQLException("A playlist song is not in the saved library.");
+                    }
+                }
             }
         }
     }
@@ -317,6 +447,7 @@ public final class LibraryRepository {
         try {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("PRAGMA busy_timeout = 3000");
+                statement.execute("PRAGMA foreign_keys = ON");
             }
 
             return connection;
@@ -384,7 +515,7 @@ public final class LibraryRepository {
                         "SELECT title, artist, album, file_size, modified_time, "
                                 + "metadata_version FROM library_tracks LIMIT 0"
                 )) {
-                    // Verify the existing cache columns before claiming schema 3.
+                    // Verify the existing cache columns before claiming this schema.
                 }
 
                 statement.execute("""
@@ -401,6 +532,32 @@ public final class LibraryRepository {
                                 + "FROM playback_preferences LIMIT 0"
                 )) {
                     // An incompatible existing table must fail, not be replaced.
+                }
+
+                statement.execute("""
+                        CREATE TABLE IF NOT EXISTS playlists (
+                            id TEXT PRIMARY KEY NOT NULL,
+                            name TEXT NOT NULL,
+                            position INTEGER NOT NULL UNIQUE CHECK (position >= 0)
+                        )
+                        """);
+                statement.execute("""
+                        CREATE TABLE IF NOT EXISTS playlist_entries (
+                            playlist_id TEXT NOT NULL REFERENCES playlists(id)
+                                ON DELETE CASCADE,
+                            track_id INTEGER NOT NULL REFERENCES library_tracks(id),
+                            position INTEGER NOT NULL CHECK (position >= 0),
+                            PRIMARY KEY (playlist_id, track_id),
+                            UNIQUE (playlist_id, position)
+                        )
+                        """);
+
+                try (ResultSet ignored = statement.executeQuery(
+                        "SELECT id, name, position FROM playlists LIMIT 0"
+                ); ResultSet ignoredEntries = statement.executeQuery(
+                        "SELECT playlist_id, track_id, position FROM playlist_entries LIMIT 0"
+                )) {
+                    // Existing incompatible playlist tables must also fail migration.
                 }
 
                 statement.execute("PRAGMA user_version = " + SCHEMA_VERSION);

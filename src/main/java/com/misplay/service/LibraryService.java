@@ -4,6 +4,7 @@ import com.misplay.model.FolderScanResult;
 import com.misplay.model.Track;
 import com.misplay.model.TrackMetadata;
 import com.misplay.model.PlaybackPreferences;
+import com.misplay.model.Playlist;
 import com.misplay.persistence.LibraryRepository;
 import com.misplay.persistence.LibraryRepository.CachedMetadata;
 import com.misplay.persistence.LibraryRepository.SavedTrack;
@@ -33,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -47,6 +49,9 @@ public class LibraryService implements AutoCloseable {
             FXCollections.unmodifiableObservableList(tracks);
 
     private final Map<Path, Track> tracksByPath = new HashMap<>();
+    private final ObservableList<Playlist> playlists = FXCollections.observableArrayList();
+    private final ObservableList<Playlist> readOnlyPlaylists =
+            FXCollections.unmodifiableObservableList(playlists);
 
     private final Deque<Track> pendingMetadata = new ArrayDeque<>();
     private final Set<Track> queuedMetadata = new HashSet<>();
@@ -89,7 +94,7 @@ public class LibraryService implements AutoCloseable {
     private final ReadOnlyBooleanWrapper librarySaveFailed =
             new ReadOnlyBooleanWrapper(false);
     private final ReadOnlyStringWrapper libraryStorageMessage =
-            new ReadOnlyStringWrapper("Loading saved library and settings...");
+            new ReadOnlyStringWrapper("Loading saved library, playlists and settings...");
 
     // A single worker owns all database operations. It drains accepted writes
     // on normal shutdown, so this thread deliberately is not a daemon.
@@ -109,6 +114,9 @@ public class LibraryService implements AutoCloseable {
     private PlaybackPreferences playbackPreferences = PlaybackPreferences.defaults();
     private PlaybackPreferences pendingPreferences;
     private PlaybackPreferences activePreferences;
+    // Null means no pending change; an empty list is a real delete-all snapshot.
+    private List<Playlist> pendingPlaylists;
+    private List<Playlist> activePlaylists;
     private boolean restoreStarted;
     private boolean persistenceEnabled;
 
@@ -168,6 +176,146 @@ public class LibraryService implements AutoCloseable {
         }
     }
 
+    public ObservableList<Playlist> getPlaylists() {
+        return readOnlyPlaylists;
+    }
+
+    public Playlist getPlaylist(String id) {
+        return playlists.stream().filter(playlist -> playlist.id().equals(id))
+                .findFirst().orElseThrow(
+                        () -> new IllegalArgumentException("This playlist no longer exists.")
+                );
+    }
+
+    public Playlist createPlaylist(String name) {
+        requirePlaylistEditing();
+        Playlist playlist = new Playlist(UUID.randomUUID().toString(), name, List.of());
+        requireAvailablePlaylistName(playlist.name(), null);
+        playlists.add(playlist);
+        queuePlaylistSave();
+        return playlist;
+    }
+
+    public void renamePlaylist(String id, String name) {
+        requirePlaylistEditing();
+        Playlist previous = getPlaylist(id);
+        Playlist renamed = new Playlist(id, name, previous.files());
+        requireAvailablePlaylistName(renamed.name(), id);
+        replacePlaylist(previous, renamed);
+    }
+
+    public void deletePlaylist(String id) {
+        requirePlaylistEditing();
+        playlists.remove(getPlaylist(id));
+        queuePlaylistSave();
+    }
+
+    /** Append selected library songs once, keeping their supplied order. */
+    public int addToPlaylist(String id, List<Track> selectedTracks) {
+        requirePlaylistEditing();
+        Playlist previous = getPlaylist(id);
+        Set<File> files = new LinkedHashSet<>(previous.files());
+
+        for (Track track : selectedTracks) {
+            files.add(requireLibraryTrack(track));
+        }
+
+        int added = files.size() - previous.files().size();
+
+        if (added > 0) {
+            replacePlaylist(previous, new Playlist(id, previous.name(), List.copyOf(files)));
+        }
+
+        return added;
+    }
+
+    public int removeFromPlaylist(String id, List<Track> selectedTracks) {
+        requirePlaylistEditing();
+        Playlist previous = getPlaylist(id);
+        Set<File> removals = new HashSet<>();
+
+        for (Track track : selectedTracks) {
+            removals.add(requireLibraryTrack(track));
+        }
+
+        List<File> remaining = previous.files().stream()
+                .filter(file -> !removals.contains(file)).toList();
+        int removed = previous.files().size() - remaining.size();
+
+        if (removed > 0) {
+            replacePlaylist(previous, new Playlist(id, previous.name(), remaining));
+        }
+
+        return removed;
+    }
+
+    /** Move one song a single step in the full manual order. */
+    public boolean movePlaylistTrack(String id, Track track, int direction) {
+        requirePlaylistEditing();
+
+        if (direction != -1 && direction != 1) {
+            throw new IllegalArgumentException("Move direction must be -1 or 1.");
+        }
+
+        Playlist previous = getPlaylist(id);
+        List<File> files = new ArrayList<>(previous.files());
+        int index = files.indexOf(requireLibraryTrack(track));
+
+        if (index < 0) {
+            throw new IllegalArgumentException("This song is not in the playlist.");
+        }
+
+        int destination = index + direction;
+
+        if (destination < 0 || destination >= files.size()) {
+            return false;
+        }
+
+        java.util.Collections.swap(files, index, destination);
+        replacePlaylist(previous, new Playlist(id, previous.name(), files));
+        return true;
+    }
+
+    private void requirePlaylistEditing() {
+        if (closed || restoringLibrary.get()) {
+            throw new IllegalStateException("Wait for the saved library to finish loading.");
+        }
+    }
+
+    private File requireLibraryTrack(Track track) {
+        Objects.requireNonNull(track);
+        File file = track.getFile();
+
+        if (tracksByPath.get(file.toPath()) != track) {
+            throw new IllegalArgumentException("Choose a song from this library.");
+        }
+
+        return file;
+    }
+
+    private void requireAvailablePlaylistName(String name, String exceptId) {
+        if (name.equalsIgnoreCase("All songs") || playlists.stream().anyMatch(
+                playlist -> !playlist.id().equals(exceptId)
+                        && playlist.name().equalsIgnoreCase(name)
+        )) {
+            throw new IllegalArgumentException("Choose a different playlist name.");
+        }
+    }
+
+    private void replacePlaylist(Playlist previous, Playlist replacement) {
+        if (!previous.equals(replacement)) {
+            playlists.set(playlists.indexOf(previous), replacement);
+            queuePlaylistSave();
+        }
+    }
+
+    private void queuePlaylistSave() {
+        if (persistenceEnabled) {
+            pendingPlaylists = List.copyOf(playlists);
+            writeNextFiles();
+        }
+    }
+
     // Call once from Application.start, after the UI bindings are installed.
     public void restoreLibrary() {
         if (closed || restoreStarted) {
@@ -205,6 +353,7 @@ public class LibraryService implements AutoCloseable {
             playbackPreferences = state.preferences();
             persistenceEnabled = true;
             registerFiles(files);
+            playlists.setAll(state.playlists());
             restoreTask = null;
             libraryStorageMessage.set(
                     tracks.isEmpty()
@@ -222,7 +371,7 @@ public class LibraryService implements AutoCloseable {
             restoreTask = null;
             persistenceEnabled = false;
             libraryStorageMessage.set(
-                    "Saved library or settings could not be opened. "
+                    "Saved library, playlists or settings could not be opened. "
                             + "Changes will not be saved this session."
             );
             restoringLibrary.set(false);
@@ -309,21 +458,25 @@ public class LibraryService implements AutoCloseable {
         if (closed || !persistenceEnabled || saveTask != null
                 || librarySaveFailed.get()
                 || (pendingDatabaseFiles.isEmpty() && pendingDatabaseMetadata.isEmpty()
-                        && pendingPreferences == null)) {
+                        && pendingPreferences == null && pendingPlaylists == null)) {
             return;
         }
 
         List<File> batch = List.copyOf(pendingDatabaseFiles);
         List<SavedTrack> metadataBatch = List.copyOf(pendingDatabaseMetadata.values());
         PlaybackPreferences preferencesBatch = pendingPreferences;
+        List<Playlist> playlistsBatch = pendingPlaylists;
         pendingDatabaseFiles.clear();
         pendingDatabaseMetadata.clear();
         pendingPreferences = null;
+        pendingPlaylists = null;
 
         Task<Void> task = new Task<>() {
             @Override
             protected Void call() throws Exception {
-                libraryRepository.saveChanges(batch, metadataBatch, preferencesBatch);
+                libraryRepository.saveChanges(
+                        batch, metadataBatch, preferencesBatch, playlistsBatch
+                );
                 return null;
             }
         };
@@ -332,8 +485,9 @@ public class LibraryService implements AutoCloseable {
         activeDatabaseFiles = batch;
         activeDatabaseMetadata = metadataBatch;
         activePreferences = preferencesBatch;
+        activePlaylists = playlistsBatch;
         savingLibrary.set(true);
-        libraryStorageMessage.set("Saving library and settings...");
+        libraryStorageMessage.set("Saving library, playlists and settings...");
 
         task.setOnSucceeded(event -> {
             if (closed || saveTask != task) {
@@ -344,8 +498,9 @@ public class LibraryService implements AutoCloseable {
             activeDatabaseFiles = List.of();
             activeDatabaseMetadata = List.of();
             activePreferences = null;
+            activePlaylists = null;
             savingLibrary.set(false);
-            libraryStorageMessage.set("Library and settings saved.");
+            libraryStorageMessage.set("Library, playlists and settings saved.");
             writeNextFiles();
         });
 
@@ -370,14 +525,19 @@ public class LibraryService implements AutoCloseable {
                 pendingPreferences = preferencesBatch;
             }
 
+            if (pendingPlaylists == null) {
+                pendingPlaylists = playlistsBatch;
+            }
+
             saveTask = null;
             activeDatabaseFiles = List.of();
             activeDatabaseMetadata = List.of();
             activePreferences = null;
+            activePlaylists = null;
             savingLibrary.set(false);
             librarySaveFailed.set(true);
             libraryStorageMessage.set(
-                    "Library or settings changes could not be saved. You can retry."
+                    "Library, playlist or settings changes could not be saved. You can retry."
             );
             System.err.println(
                     "Library save failed for " + getLibraryDatabasePath()
@@ -686,25 +846,29 @@ public class LibraryService implements AutoCloseable {
         retainMetadataChanges(finalMetadata, List.copyOf(pendingDatabaseMetadata.values()));
         PlaybackPreferences finalPreferences = pendingPreferences != null
                 ? pendingPreferences : activePreferences;
+        List<Playlist> finalPlaylists = pendingPlaylists != null
+                ? pendingPlaylists : activePlaylists;
         pendingDatabaseFiles.clear();
         pendingDatabaseMetadata.clear();
         pendingPreferences = null;
+        pendingPlaylists = null;
         restoreTask = null;
         saveTask = null;
         activeDatabaseFiles = List.of();
         activeDatabaseMetadata = List.of();
         activePreferences = null;
+        activePlaylists = null;
         savingLibrary.set(false);
         restoringLibrary.set(false);
 
         if (persistenceEnabled && (!finalFiles.isEmpty() || !finalMetadata.isEmpty()
-                || finalPreferences != null)) {
+                || finalPreferences != null || finalPlaylists != null)) {
             List<File> finalBatch = List.copyOf(finalFiles);
             List<SavedTrack> finalMetadataBatch = List.copyOf(finalMetadata.values());
             databaseExecutor.execute(() -> {
                 try {
                     libraryRepository.saveChanges(
-                            finalBatch, finalMetadataBatch, finalPreferences
+                            finalBatch, finalMetadataBatch, finalPreferences, finalPlaylists
                     );
                 } catch (Exception error) {
                     System.err.println(
