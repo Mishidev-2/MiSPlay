@@ -11,6 +11,7 @@ import com.misplay.service.LyricsService;
 import com.misplay.view.LyricsPane;
 import com.misplay.model.TrackMetadata;
 import com.misplay.model.Track;
+import com.misplay.model.TrackSort;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -369,6 +370,19 @@ public class MiSPlayApp extends Application {
         playlistChooser.disableProperty().bind(libraryService.restoringLibraryProperty());
         HBox.setHgrow(playlistChooser, Priority.ALWAYS);
 
+        ComboBox<TrackSort> sortChooser = new ComboBox<>();
+        sortChooser.setId("library-sort");
+        sortChooser.setPrefWidth(220);
+        sortChooser.setAccessibleText("Sort the current library view");
+        sortChooser.setTooltip(new Tooltip(
+                "Changes this view. Starting a song captures its displayed order."
+        ));
+        sortChooser.disableProperty().bind(libraryService.restoringLibraryProperty());
+        Map<String, TrackSort> viewSorts = new HashMap<>();
+        boolean[] changingSort = {false};
+        HBox sortControls = new HBox(8, new Label("Sort:"), sortChooser);
+        sortControls.setAlignment(Pos.CENTER_LEFT);
+
         FilteredList<Track> filteredTracks = new FilteredList<>(
                 libraryService.getTracks(),
                 track -> track.matchesSearch("")
@@ -393,8 +407,25 @@ public class MiSPlayApp extends Application {
         );
         BooleanBinding manualPlaylistSelected = allSongsSelected.or(favoritesSelected).not();
 
+        Runnable configureSortChoices = () -> {
+            Playlist view = playlistChooser.getValue();
+            String id = view == null ? allSongs.id() : view.id();
+            boolean manual = manualPlaylistSelected.get();
+            changingSort[0] = true;
+            try {
+                sortChooser.getItems().setAll(java.util.Arrays.stream(TrackSort.values())
+                        .filter(mode -> manual || mode != TrackSort.PLAYLIST_ORDER).toList());
+                TrackSort remembered = viewSorts.getOrDefault(id, TrackSort.ADDED_ORDER);
+                sortChooser.setValue(!manual && remembered == TrackSort.PLAYLIST_ORDER
+                        ? TrackSort.ADDED_ORDER : remembered);
+            } finally {
+                changingSort[0] = false;
+            }
+        };
+        configureSortChoices.run();
+
         Runnable applyLibraryView = () -> {
-            List<Track> selection = List.copyOf(songList.getSelectionModel().getSelectedItems());
+            var selection = java.util.Set.copyOf(songList.getSelectionModel().getSelectedItems());
             Track selected = songList.getSelectionModel().getSelectedItem();
             Playlist playlist = playlistChooser.getValue();
             boolean showAll = allSongsSelected.get();
@@ -415,20 +446,24 @@ public class MiSPlayApp extends Application {
                             || (showPlaylist && positions.containsKey(track.getFile())))
                             && track.matchesSearch(query)
             );
-            visibleTracks.setComparator(!showPlaylist ? null : java.util.Comparator.comparingInt(
-                    track -> positions.getOrDefault(track.getFile(), Integer.MAX_VALUE)
-            ));
+            List<File> addedFiles = showPlaylist ? playlist.addedFiles()
+                    : libraryService.getTracks().stream().map(Track::getFile).toList();
+            TrackSort mode = sortChooser.getValue() == null
+                    ? TrackSort.ADDED_ORDER : sortChooser.getValue();
+            visibleTracks.setComparator(mode.comparator(addedFiles,
+                    showPlaylist ? playlist.files() : addedFiles));
 
             songList.getSelectionModel().clearSelection();
 
-            for (Track track : selection) {
-                if (visibleTracks.contains(track)) {
-                    songList.getSelectionModel().select(track);
-                }
+            int[] retained = java.util.stream.IntStream.range(0, visibleTracks.size())
+                    .filter(index -> selection.contains(visibleTracks.get(index))).toArray();
+            if (retained.length > 0) {
+                songList.getSelectionModel().selectIndices(retained[0],
+                        java.util.Arrays.copyOfRange(retained, 1, retained.length));
             }
-
-            if (selected != null && visibleTracks.contains(selected)) {
-                songList.getSelectionModel().select(selected);
+            int lead = selected == null ? -1 : visibleTracks.indexOf(selected);
+            if (lead >= 0) {
+                songList.getSelectionModel().select(lead);
             }
         };
 
@@ -436,6 +471,7 @@ public class MiSPlayApp extends Application {
         boolean[] refreshingPlaylistChoices = {false};
         playlistChooser.valueProperty().addListener((observable, oldValue, newValue) -> {
             if (!refreshingPlaylistChoices[0]) {
+                configureSortChoices.run();
                 applyLibraryView.run();
             }
         });
@@ -454,7 +490,25 @@ public class MiSPlayApp extends Application {
                 refreshingPlaylistChoices[0] = false;
             }
 
+            configureSortChoices.run();
             applyLibraryView.run();
+        });
+        sortChooser.valueProperty().addListener((observable, previous, current) -> {
+            if (!changingSort[0] && current != null) {
+                Playlist view = playlistChooser.getValue();
+                viewSorts.put(view == null ? allSongs.id() : view.id(), current);
+                applyLibraryView.run();
+            }
+        });
+        libraryService.getTracks().addListener((ListChangeListener<Track>) change -> {
+            boolean membershipChanged = false;
+            while (change.next()) {
+                membershipChanged |= change.wasAdded() || change.wasRemoved()
+                        || change.wasPermutated();
+            }
+            if (membershipChanged) {
+                applyLibraryView.run();
+            }
         });
         libraryService.favoriteFilesProperty().addListener((observable, previous, current) -> {
             if (favoritesSelected.get()) {
@@ -752,26 +806,32 @@ public class MiSPlayApp extends Application {
                 libraryService.restoringLibraryProperty().or(manualPlaylistSelected.not())
                         .or(Bindings.isEmpty(songList.getSelectionModel().getSelectedItems()))
         );
+        moveUpButton.setId("playlist-move-up");
+        moveDownButton.setId("playlist-move-down");
         moveUpButton.disableProperty().bind(Bindings.createBooleanBinding(
                 () -> removeFromPlaylistButton.isDisabled()
+                        || sortChooser.getValue() != TrackSort.PLAYLIST_ORDER
                         || !searchField.getText().isBlank()
                         || songList.getSelectionModel().getSelectedItems().size() != 1
                         || songList.getSelectionModel().getSelectedIndex() <= 0,
                 removeFromPlaylistButton.disableProperty(), searchField.textProperty(),
+                sortChooser.valueProperty(),
                 songList.getSelectionModel().getSelectedItems(),
                 songList.getSelectionModel().selectedIndexProperty()
         ));
         moveDownButton.disableProperty().bind(Bindings.createBooleanBinding(
                 () -> removeFromPlaylistButton.isDisabled()
+                        || sortChooser.getValue() != TrackSort.PLAYLIST_ORDER
                         || !searchField.getText().isBlank()
                         || songList.getSelectionModel().getSelectedItems().size() != 1
                         || songList.getSelectionModel().getSelectedIndex() >= visibleTracks.size() - 1,
                 removeFromPlaylistButton.disableProperty(), searchField.textProperty(),
+                sortChooser.valueProperty(),
                 songList.getSelectionModel().getSelectedItems(),
                 songList.getSelectionModel().selectedIndexProperty(), visibleTracks
         ));
-        moveUpButton.setTooltip(new Tooltip("Select one song and clear search to reorder."));
-        moveDownButton.setTooltip(new Tooltip("Select one song and clear search to reorder."));
+        moveUpButton.setTooltip(new Tooltip("Choose Playlist order, select one song and clear search to reorder."));
+        moveDownButton.setTooltip(new Tooltip("Choose Playlist order, select one song and clear search to reorder."));
 
         addToPlaylistButton.setOnAction(event -> {
             List<Track> selected = songList.getSelectionModel().getSelectedIndices().stream()
@@ -800,7 +860,9 @@ public class MiSPlayApp extends Application {
         Consumer<Integer> moveSelected = direction -> {
             Track selected = songList.getSelectionModel().getSelectedItem();
 
-            if (selected != null && manualPlaylistSelected.get() && searchField.getText().isBlank()) {
+            if (selected != null && manualPlaylistSelected.get()
+                    && sortChooser.getValue() == TrackSort.PLAYLIST_ORDER
+                    && searchField.getText().isBlank()) {
                 libraryService.movePlaylistTrack(playlistChooser.getValue().id(), selected, direction);
                 songList.getSelectionModel().clearSelection();
                 songList.getSelectionModel().select(selected);
@@ -944,6 +1006,7 @@ public class MiSPlayApp extends Application {
         VBox libraryPane = new VBox(
                 6,
                 libraryViewControls,
+                sortControls,
                 searchField,
                 libraryStatusRow,
                 songList,

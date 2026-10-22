@@ -78,13 +78,17 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Metadata-cache format 2 so old first-artist-only results are rebuilt once; strict cache validation treats invalid optional fields/artist rows as misses without discarding library membership.
 - Two-line 52-pixel library rows and expanded now-playing details, complete long-text tooltips, bounded now-playing wrapping and viewport-fitting rows.
 
+- Added order and Title/Artist/Album A–Z/Z–A view sorting for All songs, Favorites and manual playlists, with cached-metadata comparators and addition-order ties.
+- Separate saved addition/manual playlist sequences, a manual-only Playlist order mode and per-view sort choices remembered for the session.
+- Transactional schema 7 upgrades from schemas 0–6, adding validated/unique playlist addition positions while retaining library IDs/order, valid cache-format-2 metadata, settings and Favorites. Existing saved manual order seeds previously unrecorded addition history.
+
 ### Changed
 
 - Metadata scheduling is owned by `LibraryService`. Changing songs prioritizes a waiting read without cancelling the active read; now-playing labels observe only the selected track.
 - Library rows and search use cached metadata rather than filename-only display/matching.
 - Library membership/order, favorite membership, playlist names/membership/order, valid text metadata and volume/repeat/shuffle choices survive restart. Active queues, selected views/tracks, playback positions, shuffled orders and artwork caches remain session-only; restored tracks validate cached tags before reusing them.
 - Reimporting or requesting playback of a loaded/failed Track now schedules a deduplicated metadata check while preserving Track identity. Unchanged files reuse tags; edited/repaired files receive fresh reads.
-- Row activation captures the current filtered library or manually ordered playlist results. View changes, playlist reordering, membership edits and playlist deletion leave the active captured queue intact.
+- Row activation captures the displayed sorted/filtered results from any library view. Sort changes, view changes, playlist reordering, membership edits and playlist deletion leave the active captured queue intact.
 - The playlist selector keeps the same playlist ID across renamed/edited snapshots; deleting the active playlist returns the view to All songs. Each launch begins in All songs without autoplay.
 - The window accommodates playlist controls and retains readable action buttons when a long playlist name is truncated in the dropdown.
 - View choices now distinguish built-in All songs/Favorites from Playlist: name, preserving a pre-existing manual playlist named Favorites with its own data and order.
@@ -102,7 +106,13 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Cached artist values remain separate ordered rows rather than splitting a joined display string. Cache clearing and rollback cover both scalar metadata and artist rows in the existing transaction.
 - The first-value artist-reading limitation is removed and obsolete caches are refreshed. The developer’s specific Yaezakura tags are still unverified; no file-specific fix is claimed.
 
+- Sort changes preserve visible multiselection and the lead Track. Search follows the selected comparator; metadata updates resort through the existing extractor, and imports rebuild stable position maps.
+- New playlist members append to both saved sequences; moves affect manual order only, renames retain both and remove/re-add appends a fresh membership. Move controls require Playlist order, one selection and blank search.
+- Each view initially uses Added order; later launches reset view-sort choices without autoplay. Favorites Added order remains main-library import order. No date sorting, rating controls or dependency changes are introduced.
+
 ### Verification
+
+- Sorting passed 35 model, 61 repository/migration, 24 service, 45 application UI and 8 layout checks (173 total). All 22 actual production sources compiled directly with Azul OpenJDK 25.0.3 / JavaFX 25.0.2 and the project dependencies. Real SQLite and headless Monocle 21.0.2 checks cover all modes/ties, schemas 0–6, independent orders, retained metadata/settings/Favorites, rollback, invalid addition positions, failed/newest-empty retry, active/waiting close saves, session protection, search/live metadata, selection, actual bulk-add dialogs, production queue Enter/Next wiring and default/minimum layouts with 240 rows/long credits. Invalid/missing media exercised audio-error handling; real MP3 output and native Windows dialogs were not verified. Earlier checkpoint suites were not rerun. Windows checks M297–M320 and profiling remain pending.
 
 - Maven validation and JavaFX window launch were confirmed on Windows 11.
 - The developer reported working playback/library metadata, folder importing, embedded artwork and SQLite library-path checkpoints. Detailed per-check Windows results have not been recorded.

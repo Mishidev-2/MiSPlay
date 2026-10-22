@@ -2,7 +2,7 @@
 
 A personal Windows 11 desktop music player built with Java 25 and JavaFX. The project is developed in small increments, with an emphasis on understandable Java OOP, responsive controls and measured resource use.
 
-**Status:** MP3 prototype with expanded cached metadata (artist lists, album artists, track/disc numbers and header duration), sidecar/embedded lyrics and lyric export, saved Favorites, manual playlists, library paths and playback preferences, folder importing and embedded artwork. All 21 production classes compile with Java 25/JavaFX 25.0.2 on Linux; this checkpoint passed 116 focused metadata checks and 58 export regressions (174 total). The complete Windows Maven run, actual MP3 playback/synchronization, native dialogs and the developer’s specific files still need local checks. Sorting controls, the supplied prototype’s full UI and Windows packaging remain upcoming work.
+**Status:** MP3 prototype with Added order and Title/Artist/Album sorting across All songs, Favorites and playlists, independent saved playlist orders, expanded cached metadata, sidecar/embedded lyrics and lyric export, saved library/preferences, folder importing and artwork. All 22 production classes compile with Java 25/JavaFX 25.0.2 on Linux; this sorting checkpoint passed 173 focused checks. Windows Maven, real audio/synchronization and native-dialog checks remain local work. Album/artist browsing, queue management, the supplied prototype’s full UI and Windows packaging remain upcoming work.
 
 ## Current features
 
@@ -18,7 +18,7 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Shuffle with consistent Previous/Next navigation and restoration of the captured order when shuffle is disabled.
 - Save volume, repeat mode and the shuffle switch, then restore them at startup while playback waits for a song selection.
 - Combine rapid control changes into a save after about 250 ms and capture the latest values on normal close.
-- Preserve the active queue during searches, imports, view changes, favorite edits and playlist edits/deletion.
+- Preserve the active queue during sorting, searches, imports, view changes, favorite edits and playlist edits/deletion.
 - Display playback errors and dispose of the previous audio player when switching files or closing the application.
 
 ### Library and metadata
@@ -35,6 +35,7 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Prioritize the selected song's pending metadata read after the current read finishes.
 - Display filename and Unknown artist/album fallbacks when tags are missing.
 - Search filenames, cached titles, every artist, album artists and albums, with results updating as metadata arrives.
+- Sort All songs, Favorites and playlists by Added order, Title, Artist or Album, with both A–Z and Z–A text directions. Each view remembers its choice during the session; new views and later launches start with Added order.
 - Reuse successful metadata across launches when file size and modification time still match, including successful missing-tag fallback values.
 - Check metadata on startup, playback requests and reimport; refresh edited files and allow repaired files to retry without restarting.
 
@@ -54,17 +55,17 @@ The earlier reader’s `getFirst(ARTIST)` discarded later stored artist values. 
 
 ### Manual playlists
 
-- Create, rename and delete playlists with saved names, membership and independent song order, including empty playlists.
+- Create, rename and delete playlists with saved names, membership, addition sequence and independent manual order, including empty playlists.
 - Switch between All songs and named playlists through the View dropdown; search within the selected view using the same library Track objects.
 - Use Ctrl/Shift selection to add several songs at once. New members append in visible order, duplicates are skipped, and a song can belong to several playlists.
-- Move one selected song up or down when search is clear. Shuffle still applies to playback when enabled.
+- Choose **Playlist order** to move one selected song up or down when search is clear. Returning to **Added order** restores its separate addition sequence. Shuffle still applies to playback when enabled.
 - Remove selected memberships or delete a playlist without deleting library songs or music files. Playlist deletion asks for confirmation.
 - Save through the existing background worker, Retry save action and normal-close flush.
 
 ### Favorites
 
 - Mark or unmark one or several selected library songs with Favorite/Unfavorite; marked rows show a star.
-- Browse and search a built-in Favorites view in main-library insertion order, using the same Track objects.
+- Browse, search and sort a built-in Favorites view using the same Track objects. Its Added order follows main-library import order, independently of when a song was favorited.
 - Keep favorite membership independent of manual playlists. Unfavoriting keeps library rows, other memberships and music files.
 - Save choices across launches through the existing background worker, Retry save action and normal-close flush, without autoplay.
 - Distinguish built-in Favorites from a manual playlist named Favorites through the dropdown's Playlist: name labels.
@@ -131,9 +132,11 @@ IntelliJ's bundled Maven does not automatically make `mvn` available in PowerShe
 
 The database is `%LOCALAPPDATA%\MiSPlay\library.db` on Windows. If `LOCALAPPDATA` is unavailable, MiSPlay uses `.misplay/library.db` under Java's `user.home` directory. The directory and database are created automatically when needed.
 
-SQLite saves normalized absolute paths, insertion order, title, album, ordered artist/album-artist lists, optional track/disc numbers and header duration, plus each cached result's file size, modification time and cache-format version. It also stores favorite membership, playlist IDs/names/membership/order and volume, repeat mode and the shuffle switch. Audio files stay in their original locations. The playback queue, selected library view/tab/song, playback position, shuffled order, artwork cache and loaded lyric lines remain session-only. Lyrics are read from local sidecars or the selected MP3’s tags and are not stored in SQLite.
+SQLite saves normalized absolute paths, insertion order, title, album, ordered artist/album-artist lists, optional track/disc numbers and header duration, plus each cached result's file size, modification time and cache-format version. It also stores favorite membership, playlist IDs/names/membership/manual order/addition sequence and volume, repeat mode and the shuffle switch. Audio files stay in their original locations. The playback queue, selected library view/tab/song, each view’s sort choice, playback position, shuffled order, artwork cache and loaded lyric lines remain session-only. Lyrics are read from local sidecars or the selected MP3’s tags and are not stored in SQLite.
 
-Schema **6** upgrades schemas 0–5 transactionally, preserving paths, IDs, library order, preferences, playlists and Favorites. It adds optional track/disc/duration columns and ordered `metadata_artists` rows. Metadata-cache format **2** invalidates old three-field caches so complete metadata is read once in the background; music files are not rewritten. Later launches reuse valid expanded caches after size/time validation. Unknown optional values stay unknown and still form valid cache hits. Keep a copy of `library.db` before upgrading; the earlier schema-5 application cannot open schema 6.
+Schema **7** upgrades schemas 0–6 transactionally, preserving paths, IDs, library order, preferences, playlists and Favorites. It adds an independent playlist `added_position` alongside the saved manual `position`. Older versions never stored addition history: an existing playlist’s current saved order becomes its starting Added order. Earlier addition order cannot be reconstructed after past manual moves. New additions retain their sequence independently; removing and re-adding a song puts it at the end.
+
+Metadata-cache format stays at **2**. Existing valid expanded caches remain reusable after size/time validation; only older cache formats require fresh reads under the existing metadata rules. Music files are not rewritten. Close MiSPlay and keep a copy of `library.db` before upgrading; earlier schema-6 code cannot open schema 7.
 
 Imports appear immediately and new paths/cache changes are saved in background batches. Favorite and playlist edits use the same worker; preference changes use it after a short UI save delay. If a save fails, current tracks/favorites/playlists/settings remain usable and **Retry save** retries pending changes, retaining newer metadata and favorite/playlist/preference snapshots over older failed writes. Normal shutdown captures the latest controls and drains accepted writes; a forced stop or unresolved storage error can leave changes unsaved.
 
@@ -145,20 +148,36 @@ Missing, moved or temporarily unavailable files remain listed and saved. Failed 
 
 1. Click **New playlist**, enter a name and click OK. Names are trimmed, allow 1–100 characters and must differ from other playlist names without regard to case. **All songs** is reserved.
 2. Choose **All songs** from **View**, select songs with Ctrl/Shift, then click **Add to playlist...** and choose the destination. File/folder imports populate All songs; adding playlist membership is a separate action.
-3. Choose **Playlist: name** from View. Select one song and use **Move up** or **Move down** with an empty search field to change its order.
+3. Choose **Playlist: name** from View. It initially shows **Added order**. For manual moves, choose **Playlist order** in Sort, select one song and use **Move up** or **Move down** with an empty search field.
 4. Double-click a song or press Enter to capture the current visible results for playback. Turn Shuffle OFF when checking manual playback order.
 5. Use **Rename**, **Remove from playlist** or **Delete playlist** as needed. Shared memberships and the main library remain available.
 
-Editing a playlist leaves an already captured playback queue intact, including songs subsequently removed from that playlist. Explicitly start playback again to capture the edited results. Each launch begins in All songs with playback stopped; named playlists and their order are restored independently of the active view/queue.
+Editing a playlist leaves an already captured playback queue intact, including songs subsequently removed from that playlist. Explicitly start playback again to capture the edited results. Each launch begins in All songs / Added order with playback stopped; named playlists and both saved orders are restored independently of the active view/queue. New members append once to both orders; removing and re-adding a member appends it again.
 
 ## Using Favorites
 
 1. Select songs in All songs or a manual playlist, using Ctrl/Shift for multiple selections, then click **Favorite**. Their rows gain a **★** marker.
-2. Choose **Favorites** from View to browse or search marked songs. Its order follows All songs; manual move controls are disabled.
+2. Choose **Favorites** from View to browse, search or sort marked songs. Added order follows main-library import order; manual move controls are disabled.
 3. Select songs and click **Unfavorite** to remove only their favorite membership. With a mixed selection, both actions are available and skip songs already in the requested state.
 4. Double-click or press Enter to capture the currently visible Favorites results for playback. **Add to playlist...** also works from this view.
 
 Built-in Favorites cannot be renamed or deleted. A manual **Playlist: Favorites** retains its independent members and order. Removing favorites leaves files, manual memberships and a captured playback queue intact. Saved stars/membership return after restart while the initial view remains All songs and playback stays stopped.
+
+## Sorting library views
+
+Choose a View, then use **Sort** above search. Text comparisons ignore case using a locale-neutral character comparison; they do not translate names, apply language-specific alphabet rules or sort embedded numbers naturally. Missing tags use the existing filename/Unknown fallbacks.
+
+| Sort | Result |
+| --- | --- |
+| Added order | Main-library import order in All songs/Favorites; that playlist’s own addition sequence in a manual playlist. |
+| Title A–Z / Z–A | Title in the chosen direction; equal titles retain addition order. |
+| Artist A–Z / Z–A | Complete displayed artist credit in the chosen direction, then title A–Z and addition order. |
+| Album A–Z / Z–A | Album name in the chosen direction, then album artist A–Z, disc number, track number, title A–Z and addition order. Unknown disc/track numbers follow known values. |
+| Playlist order | Manual playlists only: the saved order edited with Move up/down. |
+
+Album Z–A reverses album names while keeping disc/track order ascending within each album/album-artist group. Sorts read cached metadata; newly loaded or refreshed values can move a row. Search narrows the current sorted view. Visible selections stay selected when possible, and bulk Add to playlist follows their displayed order.
+
+Sort choices are remembered separately per view until the app closes. They do not save a new playlist order or change the current playback queue. Double-click or press Enter to capture the displayed sorted/filtered results for a new queue; Shuffle still applies when enabled. There is no date sorting or persistent sort preference in this checkpoint.
 
 ## Using lyrics
 
@@ -236,7 +255,8 @@ Only the shuffle switch is saved. A fresh queue can produce a new shuffled order
 | `src/main/java/com/misplay/service/LibraryService.java` | Observable library/playlists, immutable favorite state, metadata validation/cache, workers, editing rules, preferences and restore/save coordination |
 | `src/main/java/com/misplay/persistence/LibraryRepository.java` | SQLite schema/migration, complete startup snapshots and transactional path/cache/preference/playlist/favorite writes |
 | `src/main/java/com/misplay/model/PlaybackPreferences.java` | Immutable volume, repeat-mode and shuffle choices with safe defaults |
-| `src/main/java/com/misplay/model/Playlist.java` | Immutable playlist ID/name and unique ordered library paths |
+| `src/main/java/com/misplay/model/Playlist.java` | Immutable playlist ID/name and matching unique paths in manual and addition orders |
+| `src/main/java/com/misplay/model/TrackSort.java` | View-sort choices and cached-metadata comparators with stable addition-order ties |
 | `src/main/java/com/misplay/service/MetadataService.java` | Read-only tag/header extraction, ordered artist values, optional numbers/duration and fallbacks |
 | `src/main/java/com/misplay/service/FolderScanTask.java` | Background folder traversal, counts and cancellation checks |
 | `src/main/java/com/misplay/service/ArtworkService.java` | Selected-song artwork loading, thumbnail caching and display properties |
@@ -257,6 +277,8 @@ Only the shuffle switch is saved. A fresh queue can produce a new shuffled order
 
 Run the [manual checks](docs/DEVELOPMENT.md#manual-checks) relevant to each change. Working checkpoints have been reported by the developer; the complete per-check results have not been recorded. Automated project tests and a memory/CPU profiling baseline have not been introduced yet.
 
+The sorting checkpoint passed **35 model, 61 repository/migration, 24 service, 45 application UI and 8 layout checks: 173 total**. All 22 actual production classes compiled directly with Azul OpenJDK 25.0.3 / JavaFX 25.0.2 and the project dependencies. Linux headless Monocle 21.0.2 tests used real SQLite and production services/models, including the actual queue; no production substitute was used. Checks cover all sort modes, schemas 0–6, retained cache-format-2 data, independent playlist orders, migration/write rollback, newest-state retry/close, scoped search, live metadata resorting, selections, the actual bulk-add dialog and Enter/Next queue wiring. Rendered 820×780 and 760×720 layouts were inspected with 240 tracks and long credits. Invalid/missing media fixtures exercised audio-error handling, not real MP3 playback. Windows Maven/audio/native-dialog checks and profiling remain pending; run M297–M320 and relevant earlier checks locally. Earlier metadata/lyric/export test totals below are historical and were not rerun for sorting.
+
 The development guide distinguishes the manual checklist from development-time artwork, metadata, persistence and UI checks. Favorites passed 32 repository/migration, 20 service and 36 application/layout checks: 88 in total. The earlier playlist checkpoint's 150 checks are a separate recorded result and are not claimed as rerun for Favorites. These used a Java 17/JavaFX 21.0.1 harness with some substitute classes, so they do not establish a full Java 25/JavaFX 25.0.2 Windows build or audio regression result. A successful Maven validation alone does not compile the application or verify playback.
 
 The LRC checkpoint passed 27 parser/model, 24 sidecar-service and 38 application/layout checks (89 focused checks). The existing 32 repository, 20 library-service and 36 Favorites/application checks also passed against this checkpoint: **177 checks in total**. Coverage included rapid/same-path reloads, stale results, UTF-8/limits, clock boundaries/backward seeks, adjusted click/Enter seeks, audio-error guards, wrapped-row following after resize, queue navigation, shutdown and restart without autoplay. The same harness/substitute limits apply. The developer subsequently reported sidecar files working; detailed Windows results for M201–M224 remain unrecorded.
@@ -269,14 +291,14 @@ The expanded-metadata checkpoint passed **31 model/reader, 45 repository/migrati
 
 ## Next milestone
 
-- Install and verify expanded metadata on Windows, particularly Yaezakura, multiple artists, existing library migration, duration and restart. Record M273–M296 and pending lyric/export checks M225–M272.
-- Then implement view sorting: Added order and Title/Artist/Album with A–Z/Z–A directions across All songs, Favorites and playlists. Playlists should default to addition order; changing a view sort must preserve stored membership order and the active captured queue. No date sorting.
-- Build album/artist browsing and later queue/context-menu actions around those data rules, then measure performance before the main visual redesign.
+- Install sorting over the working expanded-metadata checkpoint, back up the database and record Windows checks M297–M320. Keep pending metadata checks M273–M296 (including Yaezakura) and lyric/export checks M225–M272.
+- Next build album/artist browsing using the cached metadata, then queue/context-menu actions.
+- Measure performance before the main visual redesign based on the supplied prototype.
 
 ## Planned features
 
 - Playlist import/export improvements.
-- Library/Favorites/playlist sorting with a return to added order, plus album/artist browsing.
+- Album/artist browsing and additional list/grid views.
 - Queue management through context menus and the queue view.
 - The supplied prototype’s navigation and bottom player, a shared Queue/Lyrics sidebar with centred lyrics, black/light/grey base colours and a saved configurable accent colour. Ratings and date-based sort controls are excluded.
 - System tray controls and an optional mini-player/overlay.
@@ -289,9 +311,10 @@ The future Python LRC generator is a separate project. AI models are not part of
 
 - MP3 is the current import/playback format; other audio formats are not part of this checkpoint.
 - Embedded lyrics currently cover supported MP3 ID3 fields, not every format supported by Musicolet. MPEG-frame-based SYLT timing, variant/language selection, external plain-text files, manual lyric-file selection, online lookup, word-level animation, tag editing and live watching are not implemented. File/tag/text/line/cue bounds do not cap total process memory.
-- Library paths/order, favorite membership, playlist names/membership/order, valid text metadata and playback preferences persist; the active queue, selected library view/tab/song, playback position, shuffled order, artwork cache and loaded lyrics are session-only. A new profile uses 50% / Repeat OFF / Shuffle OFF; saved choices override those defaults.
+- Library import order, favorite membership, playlist names/membership/manual order/addition sequence, valid text metadata and playback preferences persist; each view’s sort choice, the active queue, selected library view/tab/song, playback position, shuffled order, artwork cache and loaded lyrics are session-only. A new profile uses 50% / Repeat OFF / Shuffle OFF; saved choices override those defaults.
 - Playlists contain each path once and support manual single-song moves. Playlist import/export, drag ordering and library removal are not implemented. Saves replace a complete playlist snapshot per batch; large-playlist performance has not been profiled.
-- Favorites follows main-library insertion order and has no separate sorting or manual reordering. Accepted save batches replace its complete membership snapshot; large-favorites performance has not been profiled.
+- Favorites Added order follows main-library import order, not favorite-marking time; text sorting is available but manual reordering is not. Accepted save batches replace its complete membership snapshot; large-favorites performance has not been profiled.
+- Sort choices reset after restart. Upgraded playlists begin their addition sequence from the saved order available at migration; previously unrecorded addition history cannot be recovered. Language-specific collation and natural-number text sorting are not implemented.
 - Moved/deleted paths remain in the library. Background metadata validation detects unavailable files, but paths are not repaired automatically.
 - Title and album use the first usable values; artist lists use the documented structured/standard-field priority. Combined credits are not heuristically split. Header duration can differ from live playback duration. The actual Yaezakura file remains unverified; full artist reading and tooltips are implemented, but its specific issue is not claimed resolved.
 - Text metadata is checked on startup, playback requests and reimport. There is no continuous file watcher or content hash; edits preserving both size and modification time can evade detection. Previous values can remain visible while a background check is pending.

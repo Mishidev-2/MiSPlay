@@ -21,12 +21,13 @@ import java.util.LinkedHashMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.Objects;
 import java.util.Set;
 
 /** Blocking database operations. Call these methods on the database worker. */
 public final class LibraryRepository {
-    private static final int SCHEMA_VERSION = 6;
+    private static final int SCHEMA_VERSION = 7;
     // Bump this when tag interpretation or fallback rules change.
     private static final int METADATA_CACHE_VERSION = 2;
     private final Path databasePath;
@@ -380,6 +381,7 @@ public final class LibraryRepository {
             throws SQLException {
         Map<String, String> names = new LinkedHashMap<>();
         Map<String, List<File>> members = new LinkedHashMap<>();
+        Map<String, Map<Integer, File>> additions = new LinkedHashMap<>();
 
         try (Statement statement = connection.createStatement();
              ResultSet rows = statement.executeQuery(
@@ -394,13 +396,14 @@ public final class LibraryRepository {
 
                 names.put(id, rows.getString("name"));
                 members.put(id, new ArrayList<>());
+                additions.put(id, new TreeMap<>());
             }
         }
 
         try (Statement statement = connection.createStatement();
              ResultSet rows = statement.executeQuery(
                      """
-                     SELECT entry.playlist_id, track.path
+                     SELECT entry.playlist_id, track.path, entry.added_position
                      FROM playlist_entries entry
                      LEFT JOIN library_tracks track ON track.id = entry.track_id
                      ORDER BY entry.playlist_id, entry.position
@@ -420,8 +423,18 @@ public final class LibraryRepository {
                     throw new SQLException("A saved playlist contains a relative path.");
                 }
 
-                // A missing file on disk still belongs to the playlist.
-                files.add(path.normalize().toFile());
+                Object position = rows.getObject("added_position");
+                if (!isInteger(position) || ((Number) position).longValue() < 0
+                        || ((Number) position).longValue() > Integer.MAX_VALUE) {
+                    throw new SQLException("A playlist contains an invalid addition position.");
+                }
+                File file = path.normalize().toFile();
+                Map<Integer, File> added = additions.get(rows.getString("playlist_id"));
+                if (added.put(((Number) position).intValue(), file) != null) {
+                    throw new SQLException("A playlist repeats an addition position.");
+                }
+                // A missing file on disk still belongs to both playlist orders.
+                files.add(file);
             }
         }
 
@@ -430,7 +443,8 @@ public final class LibraryRepository {
         try {
             for (Map.Entry<String, String> entry : names.entrySet()) {
                 playlists.add(new Playlist(
-                        entry.getKey(), entry.getValue(), members.get(entry.getKey())
+                        entry.getKey(), entry.getValue(), members.get(entry.getKey()),
+                        List.copyOf(additions.get(entry.getKey()).values())
                 ));
             }
         } catch (IllegalArgumentException | NullPointerException error) {
@@ -453,8 +467,8 @@ public final class LibraryRepository {
                 "INSERT INTO playlists(id, name, position) VALUES (?, ?, ?)"
         ); PreparedStatement insertEntry = connection.prepareStatement(
                 """
-                INSERT INTO playlist_entries(playlist_id, track_id, position)
-                SELECT ?, id, ? FROM library_tracks WHERE path = ?
+                INSERT INTO playlist_entries(playlist_id, track_id, position, added_position)
+                SELECT ?, id, ?, ? FROM library_tracks WHERE path = ?
                 """
         )) {
             var ids = new HashSet<String>();
@@ -471,10 +485,16 @@ public final class LibraryRepository {
                 insertPlaylist.setInt(3, playlistIndex);
                 insertPlaylist.executeUpdate();
 
+                Map<File, Integer> addedPositions = new HashMap<>();
+                for (int index = 0; index < playlist.addedFiles().size(); index++) {
+                    addedPositions.put(playlist.addedFiles().get(index), index);
+                }
                 for (int trackIndex = 0; trackIndex < playlist.files().size(); trackIndex++) {
+                    File file = playlist.files().get(trackIndex);
                     insertEntry.setString(1, playlist.id());
                     insertEntry.setInt(2, trackIndex);
-                    insertEntry.setString(3, playlist.files().get(trackIndex).toString());
+                    insertEntry.setInt(3, addedPositions.get(file));
+                    insertEntry.setString(4, file.toString());
 
                     if (insertEntry.executeUpdate() != 1) {
                         throw new SQLException("A playlist song is not in the saved library.");
@@ -787,6 +807,20 @@ public final class LibraryRepository {
                 )) {
                     // An incompatible existing table fails the whole migration.
                 }
+
+                if (version < 7) {
+                    statement.execute("ALTER TABLE playlist_entries ADD COLUMN added_position "
+                            + "INTEGER NOT NULL DEFAULT 0 CHECK (added_position >= 0)");
+                    // Historical addition history was not stored: retain the known order.
+                    statement.execute("UPDATE playlist_entries SET added_position = position");
+                }
+                try (ResultSet ignored = statement.executeQuery(
+                        "SELECT added_position FROM playlist_entries LIMIT 0"
+                )) {
+                    // Check before declaring this migration complete.
+                }
+                statement.execute("CREATE UNIQUE INDEX IF NOT EXISTS playlist_addition_order "
+                        + "ON playlist_entries(playlist_id, added_position)");
 
                 statement.execute("PRAGMA user_version = " + SCHEMA_VERSION);
             }

@@ -245,7 +245,7 @@ public class LibraryService implements AutoCloseable {
     public void renamePlaylist(String id, String name) {
         requireLibraryEditing();
         Playlist previous = getPlaylist(id);
-        Playlist renamed = new Playlist(id, name, previous.files());
+        Playlist renamed = new Playlist(id, name, previous.files(), previous.addedFiles());
         requireAvailablePlaylistName(renamed.name(), id);
         replacePlaylist(previous, renamed);
     }
@@ -261,15 +261,18 @@ public class LibraryService implements AutoCloseable {
         requireLibraryEditing();
         Playlist previous = getPlaylist(id);
         Set<File> files = new LinkedHashSet<>(previous.files());
+        Set<File> addedFiles = new LinkedHashSet<>(previous.addedFiles());
 
         for (Track track : selectedTracks) {
-            files.add(requireLibraryTrack(track));
+            File file = requireLibraryTrack(track);
+            files.add(file);
+            addedFiles.add(file);
         }
 
         int added = files.size() - previous.files().size();
 
         if (added > 0) {
-            replacePlaylist(previous, new Playlist(id, previous.name(), List.copyOf(files)));
+            replacePlaylist(previous, new Playlist(id, previous.name(), List.copyOf(files), List.copyOf(addedFiles)));
         }
 
         return added;
@@ -289,7 +292,8 @@ public class LibraryService implements AutoCloseable {
         int removed = previous.files().size() - remaining.size();
 
         if (removed > 0) {
-            replacePlaylist(previous, new Playlist(id, previous.name(), remaining));
+            replacePlaylist(previous, new Playlist(id, previous.name(), remaining,
+                    previous.addedFiles().stream().filter(file -> !removals.contains(file)).toList()));
         }
 
         return removed;
@@ -318,7 +322,7 @@ public class LibraryService implements AutoCloseable {
         }
 
         java.util.Collections.swap(files, index, destination);
-        replacePlaylist(previous, new Playlist(id, previous.name(), files));
+        replacePlaylist(previous, new Playlist(id, previous.name(), files, previous.addedFiles()));
         return true;
     }
 

@@ -4,7 +4,7 @@
 
 MiSPlay is a personal Windows 11 desktop project developed in small, working increments. Each increment should have a clear behavior to verify. Keep the architecture understandable and add dependencies when a feature needs them.
 
-The current checkpoint includes MP3 playback, captured queues/repeat/shuffle, saved Favorites/manual playlists/library paths, expanded cached metadata, saved playback preferences, folder importing, embedded artwork, sidecar/embedded lyrics and explicit lyric export. Schema 6 adds track/disc/duration fields and ordered artist rows; cache format 2 refreshes old first-artist-only results. All 21 production sources compile on Java 25/JavaFX 25.0.2, with 116 focused metadata checks plus 58 lyric-export regressions (174 total) on Linux. Actual Windows Maven/native-dialog/audio behavior and the developer’s specific files remain local verification. Sorting, album/artist browsing, queue/context-menu management, the supplied prototype’s full UI, tray/overlay, updates and Windows packaging remain future work. Routine metadata/lyric reads do not edit MP3s; explicit export writes a chosen lyric file.
+The current checkpoint adds library/Favorites/playlist sorting and independent saved playlist addition/manual orders to MP3 playback, captured queues/repeat/shuffle, expanded cached metadata, preferences, folder importing, artwork, sidecar/embedded lyrics and export. Schema 7 adds playlist addition positions; metadata-cache format remains 2. All 22 real production sources compile on Java 25/JavaFX 25.0.2, with 173 focused sorting checks on Linux. Actual Windows Maven/native-dialog/audio behavior and the developer’s specific files remain local verification. Album/artist browsing, queue/context-menu management, the supplied prototype’s full UI, tray/overlay, updates and Windows packaging remain future work. Routine metadata/lyric reads do not edit MP3s; explicit export writes a chosen lyric file.
 
 ## Current architecture
 
@@ -29,20 +29,21 @@ The current checkpoint includes MP3 playback, captured queues/repeat/shuffle, sa
 | `LyricsPane` | Virtualized timed/plain lists, hints, clock following, reload, guarded seeks, export dialogs/button/status and exporter lifetime | File parsing, audio decoding or database state |
 | `PlaybackQueue` | Captured original/active orders, position, navigation, repeat and shuffle rules | Controls, audio resources or file reading |
 | `PlaybackPreferences` | Immutable volume, repeat mode and shuffle choices, validation and defaults | Queue membership/order, playback position, controls or SQL |
-| `Playlist` | Immutable ID/name and normalized unique file paths in manual order | Track objects, observable editing state, playback execution or SQL |
+| `Playlist` | Immutable ID/name and matching unique normalized paths in manual and addition orders | Track objects, observable editing state, playback execution or SQL |
+| `TrackSort` | View-sort labels and cached-metadata comparators with stable captured positions | File reading, SQL, controls or saved preferences |
 | `RepeatMode` | OFF, ALL and ONE choices | Queue navigation or playback execution |
 
-`LibraryRepository` also declares three nested transfer records: `CachedMetadata` contains the complete immutable TrackMetadata and file attributes, `SavedTrack` contains a file and optional cache, and `LibraryState` contains copied track entries, preferences, copied playlists and an immutable favorite-file set loaded together. A null cache represents a cache miss when loading or a request to clear cached fields when saving. Favorites introduced no new model class. LRC adds `LyricLine`, `LrcParser`, `LyricsService` and `LyricsPane`, bringing that checkpoint to 19 top-level classes. Embedded reading adds `EmbeddedLyricsReader` (20 classes); export adds `LyricsExportService`, bringing the current table to **21 top-level classes**. `LyricsExportService.Snapshot` copies the normalized source path and one nonempty timed/plain list; private `ExportException` and `BoundedOutputStream` support write validation. `LyricsService` has a private nested `LoadResult` record for timed lines, plain lines and status. `EmbeddedLyricsReader.Result` holds copied timed/plain lists and a diagnostic note; its lists cannot both be nonempty.
+`LibraryRepository` also declares three nested transfer records: `CachedMetadata` contains the complete immutable TrackMetadata and file attributes, `SavedTrack` contains a file and optional cache, and `LibraryState` contains copied track entries, preferences, copied playlists and an immutable favorite-file set loaded together. A null cache represents a cache miss when loading or a request to clear cached fields when saving. Favorites introduced no new model class. LRC adds `LyricLine`, `LrcParser`, `LyricsService` and `LyricsPane`, bringing that checkpoint to 19 top-level classes. Embedded reading adds `EmbeddedLyricsReader` (20 classes); export adds `LyricsExportService` (21 classes); sorting adds `TrackSort`, bringing the current table to **22 top-level classes**. `LyricsExportService.Snapshot` copies the normalized source path and one nonempty timed/plain list; private `ExportException` and `BoundedOutputStream` support write validation. `LyricsService` has a private nested `LoadResult` record for timed lines, plain lines and status. `EmbeddedLyricsReader.Result` holds copied timed/plain lists and a diagnostic note; its lists cannot both be nonempty.
 
 The repository also has a private `ArtistRows` read helper for ordered artist maps and invalid-cache IDs. No top-level class is added by expanded metadata.
 
 ### Startup and saved library
 
-`MiSPlayApp` shows the window, then calls `LibraryService.restoreLibrary()` once. Loading runs on a dedicated database worker. Import, favorite, playlist/view and preference controls are gated until restoration finishes; the list placeholder and storage row show loading status.
+`MiSPlayApp` shows the window, then calls `LibraryService.restoreLibrary()` once. Loading runs on a dedicated database worker. Import, favorite, playlist/view/sort and preference controls are gated until restoration finishes; the list placeholder and storage row show loading status.
 
 `LibraryRepository.defaultDatabasePath()` uses `%LOCALAPPDATA%\MiSPlay\library.db`, falling back to `.misplay/library.db` under Java's `user.home` when `LOCALAPPDATA` is missing or blank. Its constructor normalizes the path without touching the disk. Opening a connection creates the parent directory and database when needed. No separate SQLite server or `module-info.java` is required; Maven supplies `sqlite-jdbc` 3.53.4.0 and runtime `slf4j-nop` 1.7.36. The launcher's native-access option includes `ALL-UNNAMED` for the JDBC dependency.
 
-Schema version **6** is recorded with `PRAGMA user_version`. Startup upgrades schemas 0–5 transactionally. Older schemas gain their missing path/cache/preferences/playlist/favorite structures as before; schema 6 adds nullable number/duration columns and ordered artist rows. Paths, stable IDs, library order, playlists, favorites and playback settings survive. The resulting track table is:
+Schema version **7** is recorded with `PRAGMA user_version`. Startup upgrades schemas 0–6 transactionally. Earlier metadata-era structures include nullable number/duration columns and ordered artist rows; schema 7 adds `playlist_entries.added_position`, initially copied from saved `position`, plus a unique playlist/addition-position index. Past addition history was never stored, so migration cannot recover an earlier order after historical manual moves. Paths, stable IDs, library order, playlists, Favorites, valid format-2 caches and playback settings survive. The track/artist tables remain:
 
 ```sql
 CREATE TABLE library_tracks (
@@ -67,13 +68,13 @@ CREATE TABLE metadata_artists (
 );
 ```
 
-Metadata-cache format **2** is separate from schema **6**. Version-1 text caches remain in the old columns during migration but are treated as misses; a successful fresh read replaces them with complete metadata. The old `artist` column remains the joined display credit and is checked against its ordered artist rows. Names are not encoded by splitting that string: semicolons, slashes and other punctuation round-trip in individual names. Album-artist rows may be absent; a valid cache always has at least its fallback track artist.
+Metadata-cache format **2** is separate from schema **7** and is unchanged by sorting. Version-1 text caches remain in the old columns during migration but are treated as misses; a successful fresh read replaces them with complete metadata. The old `artist` column remains the joined display credit and is checked against its ordered artist rows. Names are not encoded by splitting that string: semicolons, slashes and other punctuation round-trip in individual names. Album-artist rows may be absent; a valid cache always has at least its fallback track artist.
 
-Cache reads reject unsupported/noninteger versions, invalid/missing file sizes, missing required text, inconsistent joined artists, invalid roles/positions/names and nonpositive/wrong-type/out-of-range optional numeric values. Such entries become misses while their paths remain. Missing optional numbers/duration are valid unknowns. Migration checks table compatibility before claiming schema 6 and rolls its DDL back on failure. Bump cache interpretation separately when reading/fallback rules change.
+Cache reads reject unsupported/noninteger versions, invalid/missing file sizes, missing required text, inconsistent joined artists, invalid roles/positions/names and nonpositive/wrong-type/out-of-range optional numeric values. Such entries become misses while their paths remain. Missing optional numbers/duration are valid unknowns. Migration checks table compatibility before claiming schema 7 and rolls its DDL back on failure. Bump cache interpretation separately when reading/fallback rules change.
 
-`loadState()` reads paths/caches with `ORDER BY id`, the preferences row, playlists/memberships by saved positions and favorite membership in one read transaction. It validates absolute paths and returns normalized files without checking existence or starting playback. On the JavaFX thread, `LibraryService` assigns preferences, registers Tracks, restores playlist/favorite snapshots and schedules background cache checks without reinserting paths. All restored state is assigned before `restoringLibrary` becomes false. The app applies preferences to audio/queue/controls under a guard suppressing save requests. The original insertion order becomes the library order; filesystem traversal order is not guaranteed for a newly imported folder. The initial tab is Library, its view is All songs and its playback queue is empty; restoring stars schedules no favorite write.
+`loadState()` reads paths/caches with `ORDER BY id`, the preferences row, playlists/memberships by saved positions and favorite membership in one read transaction. It validates absolute paths and returns normalized files without checking existence or starting playback. On the JavaFX thread, `LibraryService` assigns preferences, registers Tracks, restores playlist/favorite snapshots and schedules background cache checks without reinserting paths. All restored state is assigned before `restoringLibrary` becomes false. The app applies preferences to audio/queue/controls under a guard suppressing save requests. The original insertion order becomes the library order; filesystem traversal order is not guaranteed for a newly imported folder. The initial tab is Library, its view is All songs / Added order and its playback queue is empty; restoring stars schedules no favorite write.
 
-An initial restore/migration failure disables saving for that launch, displays a status message and enables temporary imports/playback/favorites/playlists/settings after loading finishes. An unreadable/corrupt database or schema version above 6 is not silently reset or replaced. Invalid playlist/favorite references, including orphan membership, also fail restoration instead of discarding data. Fix the storage problem and restart to retry restoration. Missing media paths retain library/playlist/favorite membership even if metadata or audio loading fails. Keep a database backup before upgrading; earlier schema-5 application code cannot open schema 6.
+An initial restore/migration failure disables saving for that launch, displays a status message and enables temporary imports/playback/favorites/playlists/settings after loading finishes. An unreadable/corrupt database or schema version above 7 is not silently reset or replaced. Invalid playlist/favorite references, including orphan membership, also fail restoration instead of discarding data. Fix the storage problem and restart to retry restoration. Missing media paths retain library/playlist/favorite membership even if metadata or audio loading fails. Keep a database backup before upgrading; earlier schema-6 application code cannot open schema 7.
 
 ### Saving imported paths
 
@@ -85,7 +86,7 @@ The repository opens/closes a connection per operation, uses a three-second SQLi
 
 The storage row shows restoration/saving activity. A failed write restores paths, metadata changes and settings/playlist/favorite snapshots to pending state, sets the save-failed property and pauses automatic writes. New imports/results/settings/playlist/favorite edits can still join pending work. Newer waiting metadata and snapshots win over older failed snapshots, including an empty playlist list or favorite set. Retry save clears the failure state and attempts pending changes again. Import, search, favorite/playlist editing and playback continue while saves run.
 
-Paths, library/playlist order, favorite membership, playlist IDs/names/membership, valid title/artist/album caches and playback preferences persist. Loading status, artwork, selected view and active queue/song/position/order are rebuilt or reset each launch. Normal close attempts to finish accepted writes; forced termination or an unresolved storage error can leave paths/cache/settings/playlist/favorite updates unsaved.
+Paths, library import order, both playlist orders, favorite membership, playlist IDs/names/membership, valid metadata caches and playback preferences persist. Loading status, artwork, selected view, per-view sort choices and active queue/song/position/order are rebuilt or reset each launch. Normal close attempts to finish accepted writes; forced termination or an unresolved storage error can leave paths/cache/settings/playlist/favorite updates unsaved.
 
 ### Opening a track
 
@@ -156,14 +157,16 @@ Only volume, repeat mode and the shuffle switch are saved. Queue membership, sel
 
 `PlaybackQueue` is a plain Java class containing the captured original order, active playback order, current position, repeat mode and shuffle flag. Its entries reference files rather than loaded audio.
 
-Activating a row passes its Track to `startQueue`. That action converts the current visible filtered/sorted entries into a `List<File>` and passes it, together with the selected file, to `PlaybackQueue.start`. All songs and Favorites use library insertion order; a manual playlist uses its independent order before shuffle rules apply.
+Activating a row passes its Track to `startQueue`. That action converts the current visible filtered/sorted entries into a `List<File>` and passes it, together with the selected file, to `PlaybackQueue.start`. Every view uses its current sort before shuffle rules apply: Added order follows main-library import order for built-ins and independent addition sequence for manual playlists; Playlist order captures saved manual positions.
 
-The queue captures its file order using `List.copyOf`. Later metadata changes, searches, imports, view changes, favorite edits and playlist edits/deletion leave it intact. A song removed from Favorites or a playlist can still play from that previously captured queue. Activating another row creates a new queue. Open MP3 creates a single-song queue.
+The queue captures its file order using `List.copyOf`. Later sort or metadata changes, searches, imports, view changes, favorite edits and playlist edits/deletion leave it intact. A song removed from Favorites or a playlist can still play from that previously captured queue. Activating another row creates a new queue. Open MP3 creates a single-song queue.
 
 The shared `playFile` action updates metadata/artwork, audio playback, visible selection and navigation buttons. Previous/Next use the active queue without rebuilding it and start the selected song even if playback was paused. Volume carries over.
 
 Without a valid saved choice, repeat defaults to OFF. Otherwise startup restores the saved mode. Its behavior is:
 
+| ID | Action | Expected result |
+| --- | --- | --- |
 | Mode | Natural completion | Manual Previous and Next |
 | --- | --- | --- |
 | OFF | Advance to the next track; remain silent at zero after the final track. | Stop at the queue boundaries. |
@@ -222,7 +225,7 @@ The completion callback remains registered when individual players are replaced.
 
 The source list uses an extractor observing each track's `metadataProperty()`, so metadata changes produce list-update events.
 
-A `ListView<Track>` displays filtered/manual-order entries through reusable cells with a fixed height of **52 pixels**. Multiple selection supports Ctrl/Shift membership actions; playback activation uses the chosen row. Each populated cell binds two lines: optional favorite star plus title, then artists/album and known disc/track/header-duration details. A bound tooltip retains complete text. Cell preferred width is zero so VirtualFlow fits rows to the viewport instead of expanding horizontally for long credits. Empty/reused cells detach old bindings/tooltips. Pending tracks use filename/Unknown fallbacks until the background read finishes; small files may update too quickly to observe them. User-selectable text sorting is a later checkpoint.
+A `ListView<Track>` displays filtered/sorted entries through reusable cells with a fixed height of **52 pixels**. Multiple selection supports Ctrl/Shift membership actions; playback activation uses the chosen row. Each populated cell binds two lines: optional favorite star plus title, then artists/album and known disc/track/header-duration details. A bound tooltip retains complete text. Cell preferred width is zero so VirtualFlow fits rows to the viewport instead of expanding horizontally for long credits. Empty/reused cells detach old bindings/tooltips. Pending tracks use filename/Unknown fallbacks until the background read finishes; small files may update too quickly to observe them. The current Sort dropdown controls the SortedList comparator; cached metadata updates can move rows.
 
 When a cell is reused, `updateItem` unbinds its text, disposes of its previous binding and clears empty-cell content before binding to another Track. Cell rendering uses in-memory values and does not read tags or decode artwork.
 
@@ -240,17 +243,27 @@ Filtering uses in-memory values. Newly imported tracks receive metadata in the b
 
 Changes to search results do not modify the captured playback queue or interrupt playback.
 
+### Library sorting
+
+`TrackSort` defines Added order, Playlist order, Title A–Z/Z–A, Artist A–Z/Z–A and Album A–Z/Z–A. Built-in All songs/Favorites exclude Playlist order. The app keeps a session-only map from view ID to choice; new views default to Added order. Replacing a playlist snapshot retains its view/sort by ID. Restart begins in All songs / Added order without autoplay; no sort preference is written to SQLite.
+
+Comparators capture file-position maps from immutable lists and only access in-memory Track metadata during comparison. Added order uses library import positions for built-ins (including Favorites, not favorite-marking time) and `Playlist.addedFiles()` for manual playlists. Playlist order uses `files()`. Text uses `String.CASE_INSENSITIVE_ORDER`, not locale-specific collation or natural-number ordering. Title sorts use addition positions as final ties. Artist sorts compare the full joined credit in the selected direction, then title ascending and addition. Album sorts compare album name in the selected direction, then joined album artist ascending, disc ascending, track ascending, title ascending and addition. Unknown numeric values sort last. Descending album mode keeps the internal disc/track sequence ascending.
+
+Search and membership predicates still wrap the canonical source list. A sort/view/search reapplication captures the selected Track set and lead, updates predicate/comparator, then restores visible indices in a batch and restores the lead. Membership changes rebuild captured position maps; metadata UPDATE events use the existing extractor and SortedList resorting. None of these actions rebuilds the playback queue. Actual row activation captures the displayed sorted/filtered file list; Shuffle still applies independently.
+
+There is no date sort, saved sort preference, manual ordering for built-ins or metadata/file reading inside a comparator. Comparators and view reapplication run on the FX thread; large-library sort latency has not been profiled. Keep future album/artist screens and queue actions consistent with these independent view/saved-order/captured-queue rules.
+
 ### Manual playlists
 
-`Playlist` is an immutable record containing a stable string ID, trimmed name and copied normalized absolute file paths in manual order. Its constructor rejects blank IDs, blank/overlong names and duplicate normalized members. The app permits 1–100 name characters; service create/rename checks also reject case-insensitive duplicate names and reserve All songs. New saved IDs come from `UUID.randomUUID()`.
+`Playlist` is an immutable record containing a stable string ID, trimmed name and copied normalized absolute file paths in manual `files()` and addition `addedFiles()` orders. Both lists must contain exactly the same unique members. Its three-argument constructor seeds both orders for compatibility. The constructor rejects blank IDs, blank/overlong names, duplicates and mismatched order membership. The app permits 1–100 name characters; service create/rename checks also reject case-insensitive duplicate names and reserve All songs. New saved IDs come from `UUID.randomUUID()`.
 
-`LibraryService.getPlaylists()` exposes an unmodifiable observable list of immutable snapshots. `createPlaylist`, `renamePlaylist`, `deletePlaylist`, `addToPlaylist`, `removeFromPlaylist` and `movePlaylistTrack` own edits on the JavaFX thread and are gated during restoration. Added/removed Track arguments must be the service's canonical library objects. Adds use a `LinkedHashSet` to append once in supplied order; the UI supplies visible selection order. A single move swaps adjacent entries, with boundary moves and unchanged renames/duplicate adds producing no save.
+`LibraryService.getPlaylists()` exposes an unmodifiable observable list of immutable snapshots. `createPlaylist`, `renamePlaylist`, `deletePlaylist`, `addToPlaylist`, `removeFromPlaylist` and `movePlaylistTrack` own edits on the JavaFX thread and are gated during restoration. Added/removed Track arguments must be the service's canonical library objects. Adds append once to both independent LinkedHashSet-backed sequences in supplied order; the UI supplies sorted visible selection order. Removing filters both lists; remove/re-add appends to both. Renames retain both sequences. A single move swaps adjacent manual entries only, with boundary moves and unchanged renames/duplicate adds producing no save.
 
-The View dropdown includes synthetic All songs/Favorites choices plus saved manual snapshots displayed as Playlist: name. Playlist-list changes rebuild its choices while preserving the selected ID, including through renames and membership edits. Deleting the selected playlist falls back to All songs. The existing library `FilteredList` limits membership/search and a `SortedList` applies saved playlist positions; built-in views retain source insertion order. Rows therefore keep the same Track identities and live metadata updates. Selection is retained where still visible when the view is reapplied.
+The View dropdown includes synthetic All songs/Favorites choices plus saved manual snapshots displayed as Playlist: name. Playlist-list changes rebuild its choices while preserving the selected ID, including through renames and membership edits. Deleting the selected playlist falls back to All songs. The existing library `FilteredList` limits membership/search and a `SortedList` applies the selected comparator for every view. Rows therefore keep the same Track identities and live metadata updates. Selection is retained where still visible when the view is reapplied.
 
-New/rename dialogs remain open for invalid names. Add to playlist opens a destination chooser and skips existing memberships. Remove from playlist edits only that playlist; Delete playlist asks for confirmation. These operations keep library rows and media files intact, including shared membership in another playlist. Move buttons require one selected song and a blank search, so a move cannot be obscured by hidden results. File/folder imports still populate All songs; they do not automatically join the selected playlist. The dropdown truncates long names while keeping header action labels readable.
+New/rename dialogs remain open for invalid names. Add to playlist opens a destination chooser and skips existing memberships. Remove from playlist edits only that playlist; Delete playlist asks for confirmation. These operations keep library rows and media files intact, including shared membership in another playlist. Move buttons require Playlist order, one selected song and a blank search, so a move cannot be obscured by hidden results. File/folder imports still populate All songs; they do not automatically join the selected playlist. The dropdown truncates long names while keeping header action labels readable.
 
-Schema 4 adds:
+Schema 4 introduced the playlist tables; schema 7 extends their membership order as follows:
 
 ```sql
 CREATE TABLE IF NOT EXISTS playlists (
@@ -263,20 +276,23 @@ CREATE TABLE IF NOT EXISTS playlist_entries (
     playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
     track_id INTEGER NOT NULL REFERENCES library_tracks(id),
     position INTEGER NOT NULL CHECK (position >= 0),
+    added_position INTEGER NOT NULL DEFAULT 0 CHECK (added_position >= 0),
     PRIMARY KEY (playlist_id, track_id),
     UNIQUE (playlist_id, position)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS playlist_addition_order
+    ON playlist_entries(playlist_id, added_position);
 ```
 
-Playlist positions preserve creation order; only song positions have move controls. The repository reads memberships by position and maps track IDs back to normalized paths. Missing media on disk remains a member, while missing database references or invalid snapshots fail loading without silently deleting data.
+Playlist positions preserve creation order; only manual song positions have move controls. The repository reads manual memberships by position and reconstructs addition order with a per-playlist TreeMap of added_position. Addition positions must be nonnegative integers within Java int range and unique within that playlist. Gaps retain relative order; saves rewrite both sequences densely from zero. Missing media on disk remains a member in both orders, while missing database references, invalid positions or invalid snapshots fail loading without silently deleting data.
 
-Each accepted playlist save replaces the complete playlist/membership snapshot transactionally, leaving library IDs, order and caches intact. The four-argument `saveChanges` accepts an optional playlist list alongside paths/cache/preferences; existing overloads pass null to preserve playlists. An empty list is a real delete-all snapshot. Active and pending snapshots remain distinct so newer edits or delete-all survive an older failure and the final shutdown flush. Edits after a failed initial restore stay session-only.
+Each accepted playlist save replaces the complete playlist/membership snapshot transactionally, writing manual and addition positions together and leaving library IDs, order and caches intact. The four-argument `saveChanges` accepts an optional playlist list alongside paths/cache/preferences; existing overloads pass null to preserve playlists. An empty list is a real delete-all snapshot. Active and pending snapshots remain distinct so newer edits or delete-all survive an older failure and the final shutdown flush. Edits after a failed initial restore stay session-only.
 
-No playlist import/export, drag ordering, duplicate entries within one playlist or library-removal feature is included. Full-snapshot performance for large playlists has not been profiled. The selected view and playback queue remain session-only; saved playlist order is restored without autoplay.
+No playlist import/export, drag ordering, duplicate entries within one playlist or library-removal feature is included. Full-snapshot performance for large playlists has not been profiled. The selected view, sort choice and playback queue remain session-only; both saved playlist orders are restored without autoplay.
 
 ### Favorites
 
-`LibraryService` stores favorite membership as an immutable `Set<File>` of normalized library paths inside a `ReadOnlyObjectWrapper`. `getFavoriteFiles()` returns the immutable snapshot, `favoriteFilesProperty()` exposes its read-only property and `isFavorite(Track)` supports UI queries. The Track and Playlist models remain unchanged.
+`LibraryService` stores favorite membership as an immutable `Set<File>` of normalized library paths inside a `ReadOnlyObjectWrapper`. `getFavoriteFiles()` returns the immutable snapshot, `favoriteFilesProperty()` exposes its read-only property and `isFavorite(Track)` supports UI queries. The Favorites feature itself needs no separate Track/Playlist state; current Playlist additions are independent of favorite membership.
 
 `setFavorites(List<Track>, boolean)` runs on the JavaFX thread after restoration. It builds a candidate set, validates every argument against the canonical library Track map, skips duplicate/unchanged members and publishes once when at least one membership changes. A later invalid Track cannot partially publish the candidate. Changed bulk edits produce one property notification and enqueue an immutable save snapshot when persistence is enabled; session-only edits remain possible after a failed initial restore.
 
@@ -284,7 +300,7 @@ Favorite/Unfavorite buttons operate on a copied multi-selection. With a mixed se
 
 The View dropdown has built-in All songs and Favorites choices plus manual Playlist: name labels. A manual playlist named Favorites keeps its own ID, members and order; it is not converted into built-in favorites on upgrade. Rename/delete/manual-move controls are disabled for built-in views. Add to playlist from Favorites chooses only real manual destinations.
 
-Favorites adds a membership predicate to the existing filtered library and uses source library order, with no manual comparator or extra Track objects. Membership changes reapply the view when Favorites is selected; metadata updates continue through the library extractor. Search and favorite edits do not rebuild the captured playback queue. Removing a favorite keeps its file, library row and manual memberships; deleting a manual playlist preserves favorite membership.
+Favorites adds a membership predicate to the existing filtered library and uses its selected TrackSort comparator with no extra Track objects. Its Added order is main-library import order; text modes are independent from All songs. Membership changes reapply the view when Favorites is selected; metadata updates continue through the library extractor. Search and favorite edits do not rebuild the captured playback queue. Removing a favorite keeps its file, library row and manual memberships; deleting a manual playlist preserves favorite membership.
 
 Schema 5 adds:
 
@@ -519,13 +535,21 @@ Independent fixtures append generated silent MP3 bytes to ID3v2.2/2.3/2.4 data. 
 
 The full app was instantiated with its actual services and a disposable profile to check restored rows, metadata bindings, secondary/album-artist search, stars/manual order, recycled tooltips, bounded long details, virtualized 60-row rendering, captured queue order and close saves. Rendered default 820×780/minimum 760×720 layouts were inspected; a discovered horizontal expansion of long rows was corrected and the UI checks rerun. No actual MediaPlayer playback was started by those checks, so they establish neither audio decoding/synchronization nor Windows behaviour. The target Java compiler succeeded directly. Maven package was attempted but dependency transport failed through this environment’s proxy; it is not recorded as a successful Maven build. The earlier 266-check suite and 34 export component-UI checks remain separate historical results. No RAM/CPU baseline is claimed. New local checks are M273–M296; pending lyric checks still apply.
 
+The sorting checkpoint compiled **all 22 real production sources** directly with **Azul OpenJDK 25.0.3 / JavaFX 25.0.2**, Jaudiotagger 3.0.1, SQLite JDBC 3.53.4.0 and SLF4J 1.7.36. It passed **35 model, 61 repository/migration, 24 service, 45 full-application UI and 8 layout checks: 173 total** using Linux headless Monocle 21.0.2. No production class was substituted.
+
+Model checks cover all eight modes, case/Unicode/tie handling, artist/album secondary rules, numeric unknowns, comparator contracts and immutable matching playlist sequences. Real SQLite tests cover schemas 0–6, library IDs/order, preferences/Favorites, retained cache-format-2 metadata, manual/addition round trips, gaps/dense saves, rollback of whole mixed batches and migration DDL, duplicate/invalid addition positions and future/corrupt-byte preservation. Service checks cover no-op/validated edits, shared membership, move/rename/removal/re-add, failure/newest-empty retry, active/waiting close snapshots, restart and nonsaving failed-startup sessions.
+
+The actual App/services/queue checked seven/eight mode choices, per-view session memory, sort/search/Favorites order, multiselection/lead preservation, metadata-driven resorting, manual move guards, the actual bulk-add ChoiceDialog, import/rename/delete handling, sorted/filtered Enter queue capture, Next navigation after view changes and persistence/restart without autoplay. Invalid/missing fixture media exercised production audio-error handling rather than MP3 decoding. Rendered 820×780/760×720 layouts were inspected with 240 rows, a 100-character playlist name, long credits and an audio error; list virtualization and 52-pixel rows remained intact. These are focused checks, not a full Windows Maven/audio/native-dialog regression or performance baseline. Earlier metadata/lyric/export suites were not rerun here. New manual checks are M297–M320.
+
 ## Manual checks
 
 Use MP3 files outside the Git repository. A small set of known working files is sufficient. Record actual results; these rows are a checklist, not a claim that every case has passed.
 
-Unless a check specifies otherwise, choose All songs and set Repeat OFF and Shuffle OFF after restoration; those playback choices now persist. Use a disposable fresh profile when a check requires unsaved defaults. Some pending-state/cancellation checks need a sufficiently large batch; if work finishes too quickly, record the check as not exercised rather than passed.
+Unless a check specifies otherwise, choose All songs / Added order and set Repeat OFF and Shuffle OFF after restoration; those playback choices now persist. Use a disposable fresh profile when a check requires unsaved defaults. Some pending-state/cancellation checks need a sufficiently large batch; if work finishes too quickly, record the check as not exercised rather than passed.
 
-Wait for restoration before using import controls. Run storage fault/schema checks only against a disposable database in a test copy or a harness using `LibraryService(Path)`; keep the real saved library intact.
+For earlier manual move scenarios, choose Playlist order; the default Added order now preserves its independent sequence. Run earlier feature scenarios using the complete current source rather than replacing schema-7 code with an older handoff.
+
+Wait for restoration before using import/sort controls. Run storage fault/schema checks only against a disposable database in a test copy or a harness using `LibraryService(Path)`; keep the real saved library intact.
 
 | ID | Action | Expected result |
 | --- | --- | --- |
@@ -751,9 +775,9 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M220 | Load many original fixture lines with long wrapped text, jump far ahead/back and resize between default and minimum dimensions. | Current-line highlighting remains visible after layout settles; a virtualized subset of cells renders and shared controls/reload fit. |
 | M221 | Scroll lyrics manually without changing playback; click empty space or use a secondary click. | Manual browsing and nonactivation clicks do not seek. Following resumes on the next current-line change or resize. |
 | M222 | Close while a lyric read, waiting request or follow delay is active, then reopen. | No late lyric publication/scroll occurs after close; the new launch has empty lyrics, the Library tab and no autoplay. |
-| M223 | Inspect a disposable profile before/after lyric playback/reload, then verify Favorites/manual playlists/preferences after restart. | SQLite stays at the current schema 6; existing data survives. No lyric tables, persisted line snapshots or source-file edits appear. |
+| M223 | Inspect a disposable profile before/after lyric playback/reload, then verify Favorites/manual playlists/preferences after restart. | SQLite stays at the current schema 7; existing data survives. No lyric tables, persisted line snapshots or source-file edits appear. |
 | M224 | Play a supported enhanced LRC with leading line times plus `<word-time>` markers; then remove it from an MP3 with usable embedded lyrics. | Recognized word markers are hidden and line-level timing remains; removal permits the new embedded fallback instead of retaining obsolete sidecar rows. |
-| M225 | Install the three embedded Java files over the working LRC checkpoint and run with Java 25/JavaFX 25.0.2 on Windows. | The complete project compiles and opens; existing dependencies remain sufficient; install the current metadata checkpoint too when using schema 6. Record the actual target-build result. |
+| M225 | Install the three embedded Java files over the working LRC checkpoint and run with Java 25/JavaFX 25.0.2 on Windows. | The complete project compiles and opens; existing dependencies remain sufficient; retain the current sorting checkpoint when using schema 7. Record the actual target-build result. |
 | M226 | Copy a Musicolet-edited MP3 to the Windows path MiSPlay plays, confirm no usable matching sidecar exists, and play it. | Supported embedded lyric tags load in Lyrics; record the actual file/tag format and result rather than assuming every editor option is identical. |
 | M227 | Use plain embedded words with paragraph breaks, Unicode and text resembling markup. | A wrapped plain list preserves the words/blank paragraphs literally and shows that timing is unavailable. |
 | M228 | Select plain rows, click them, press Enter and let the playback clock advance while reading farther down. | Plain interactions do not seek, create an active timed highlight or force clock-based scrolling. |
@@ -775,9 +799,11 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M244 | Navigate with Open MP3, Previous/Next, natural advancement and repeat among sidecar, embedded timed/plain and lyric-free songs. | Every playback request selects the current song’s source; lyric-free songs clear both prior formats and repeat rechecks bytes. |
 | M245 | Delay reads in a disposable harness, skip quickly among formats and reload the same path while its older read is active. | Only the newest request publishes; one latest waiting path is retained, even across timed/plain format changes. |
 | M246 | Read long wrapped plain and timed lyrics at default/minimum window sizes; switch tabs, reload and resize. | Both lists stay virtualized and readable, plain reload returns to the start, timed following settles on the current line, and shared controls fit. |
-| M247 | Change search, favorites, playlists and library selection while embedded lyrics play, then restart normally. | Captured audio/queue/lyrics remain tied to playback; restart retains saved library data but begins with empty lyric views and no autoplay. SQLite stays at the current schema 6. |
+| M247 | Change search, favorites, playlists and library selection while embedded lyrics play, then restart normally. | Captured audio/queue/lyrics remain tied to playback; restart retains saved library data but begins with empty lyric views and no autoplay. SQLite stays at the current schema 7. |
 | M248 | Close during an embedded read, queued request or timed follow delay, then launch again. | No late lyric publication/scroll occurs after close. Streams/tasks/listeners are released and no lyric state is restored automatically. |
 
+| ID | Action | Expected result |
+| --- | --- | --- |
 | M249 | Launch without lyrics, then play a timed song and reload it. | Export is disabled initially/during reads and enabled only after usable timed/plain lyrics arrive. |
 | M250 | Export sidecar or embedded timed lyrics through native Save As. | Suggested basename/filter use .lrc; UTF-8 output has three fractional digits and current line timings. |
 | M251 | Export positive/negative-offset lyrics, then save beside the MP3 and Reload lyrics. | Adjusted times round-trip once; no second offset is applied and no source header is required. |
@@ -800,9 +826,11 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M268 | Export into a different folder, then export a matching sidecar beside the MP3 and reload. | Only the matching reloaded sidecar changes source priority; saving elsewhere does not change the reader. |
 | M269 | Export plain TXT and then reload the song. | TXT is an external output, not a new app source; embedded/sidecar priority is unchanged. |
 | M270 | Accept an export and close the window normally while its write is pending. | The run exits after the accepted write finishes; complete file remains and no late UI update occurs. |
-| M271 | Restart after exports and check library/Favorites/playlists/settings. | No export state/autoplay is restored; existing saved data remains at the current schema 6 and the original MP3 is unchanged. |
+| M271 | Restart after exports and check library/Favorites/playlists/settings. | No export state/autoplay is restored; existing saved data remains at the current schema 7 and the original MP3 is unchanged. |
 | M272 | Run the complete project with JDK 25/JavaFX 25.0.2 on Windows and real Musicolet files. | Compilation, native Save As/overwrite/Unicode paths, real playback synchronization and prior core controls work; record actual results. |
 
+| ID | Action | Expected result |
+| --- | --- | --- |
 | M273 | Install all five metadata files and run the complete project with JDK 25/JavaFX 25.0.2 on Windows. | The application compiles/opens with the existing pom and no module descriptor; record the real Maven/run result. |
 | M274 | Import an MP3 containing two or more separate ARTIST values. | Every usable artist appears in order in rows/details/tooltips and can be found by search. |
 | M275 | Use usable ARTISTS values plus a different standard display ARTIST credit. | Structured ARTISTS names take priority, without appending duplicate display credits. |
@@ -817,7 +845,7 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M284 | Load long titles/artist credits at default and minimum window sizes; hover rows/details. | Rows fit without horizontal expansion, full tooltip text remains available and player controls fit. |
 | M285 | Scroll a large disposable library, change Favorites and switch All songs/Favorites/manual playlists. | Cells stay reusable, tooltips/stars update to the right item and current saved playlist order is retained. |
 | M286 | Search for a second artist and an album artist; edit/reimport tags during a search. | Matching updates as complete metadata arrives while Track identity and playback queue remain stable. |
-| M287 | On backed-up disposable schema 0–5 databases, open the new application. | Schema becomes 6 with paths/IDs/order/settings/playlists/favorites retained; old text caches rebuild in the background. |
+| M287 | On backed-up disposable schema 0–5 databases, open the new application. | Schema becomes 7 with paths/IDs/order/settings/playlists/favorites retained; old text caches rebuild under existing format-2 rules and playlist addition positions seed from saved manual order. |
 | M288 | Close after successful reads, relaunch unchanged files and observe metadata-read logs. | Complete cache-format-2 results return after attribute validation without fresh parser reads. |
 | M289 | Edit the exact played/imported MP3, then request playback or reimport it. | Changed attributes cause a fresh complete read/save; obsolete first-artist caches do not persist. |
 | M290 | Move/delete a cached file, request it, then repair/reimport it. | Failed metadata clears stale optional fields/artist rows, memberships remain and repair retries normally. |
@@ -827,6 +855,33 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M294 | In disposable fixtures, force an artist insert/migration failure or open a future/corrupt DB. | Transactions roll back; unsupported data is not reset and failed startup uses a nonsaving session. |
 | M295 | Retest Yaezakura and compare its displayed credit/full tooltip against the actual stored tags. | Record the actual result; do not infer a file-specific resolution from generic multi-artist fixtures. |
 | M296 | Check LRC/embedded display, lyric export/cancel/replace, playback controls and source MP3 bytes. | Existing behaviour holds and metadata/lyric reads leave source audio/tags unchanged; commit only after relevant local checks. |
+
+| ID | Action | Expected result |
+| --- | --- | --- |
+| M297 | Install the five sorting Java files and three docs over the working expanded-metadata source; back up library.db with the app closed and run on Windows JDK 25/JavaFX 25.0.2. | The complete Maven project compiles/opens, schema becomes 7 and no module descriptor/dependency change is needed; record actual results. |
+| M298 | Open All songs, Favorites and a manual playlist and inspect Sort. | Built-ins offer seven choices; manual playlists add Playlist order. New views start Added order; no date/rating options appear. |
+| M299 | Exercise Title, Artist and Album in both directions in All songs. | Each direction follows the documented comparison/tie rules and returning to Added order restores library import order. |
+| M300 | Favorite songs in a different sequence from library import, then sort/search Favorites. | Added order follows library import order; text modes and search work without changing favorite membership. |
+| M301 | Add songs to a playlist from a library with a different import order. | Added order follows when those members joined that playlist; duplicates do not move existing members. |
+| M302 | Choose Playlist order, select one song and use Move up/down, then return to Added order. | Only manual order changes; both sequences survive normal restart. |
+| M303 | Try moves with text/Added sorting, active search, multiple selections and boundary rows. | Buttons disable unless Playlist order has one selection, blank search and a valid destination. |
+| M304 | Rename a currently sorted playlist, including a long name, and switch away/back. | Its ID, membership, saved sequences and session sort remain; other views retain their own modes. |
+| M305 | Remove a song, re-add it and reopen/restart the playlist. | It appends to both sequences while other library/Favorites/playlist memberships and media files remain intact. |
+| M306 | Select nonadjacent rows in a sorted/filtered view and use Add to playlist. | New members append in displayed selection order, once each, to both destination sequences. |
+| M307 | Sort albums containing multiple album artists/discs/tracks and unknown numbers in both directions. | Album name direction changes; album artist, disc, track and title remain ascending within names, with unknown numbers last. |
+| M308 | Use case-equal titles, multi-artist credits, punctuation, Unicode and digit-containing names. | Full joined credits compare without case, final ties retain addition order; no locale transliteration or natural-number rule is implied. |
+| M309 | Keep a multi-selection and lead row, change sort, then narrow search. | Visible Track selections/lead survive; hidden results drop from selection without starting playback. |
+| M310 | Edit cached text/numbers in actual MP3s and reimport/request them under a text sort. | Background metadata refresh repositions rows under the same mode and retains still-visible selected Track objects. |
+| M311 | Search filename/title/secondary artist/album artist/album in each sorted view. | Search narrows that view in its current order; it is not limited to the title field. |
+| M312 | Import more files or a folder while a sort is active. | New Tracks follow the selected comparator, Added positions append and the active queue/selection remain usable. |
+| M313 | With Shuffle OFF, activate a row in sorted/filtered All songs, Favorites and playlists, then use Next/Previous and completion. | The new captured queue follows displayed order and starts at the selected song; verify actual Windows audio/completion. |
+| M314 | During playback, change sort/search/views, metadata, Favorites and playlist membership/order or delete its playlist. | The already captured queue/audio/lyrics remain tied to playback; explicitly activating a row captures a new queue. |
+| M315 | Set distinct modes in multiple views, switch repeatedly and restart. | Choices are independent during the session; restart uses All songs / Added order and no autoplay while both saved playlist orders return. |
+| M316 | Open backed-up disposable schema 0–6 databases, including a previously reordered manual playlist. | Migration is transactional, retains IDs/order/cache2/settings/Favorites and seeds addition positions from current saved manual order; older history is unavailable. |
+| M317 | Fail a disposable playlist save, change both orders/remove-re-add or delete all, release the fault and Retry save. | Newest complete or empty snapshot wins over the failed older state and survives restart. |
+| M318 | Close normally with an active save and newer waiting playlist edits, then reopen. | Accepted writes drain and the newest manual/addition snapshots persist; a forced stop is not covered by this guarantee. |
+| M319 | Use disposable future/corrupt databases and invalid/duplicate addition positions or incompatible migration structures. | Restore/migration fails without resetting data; session edits do not overwrite an unsupported database. |
+| M320 | Check default/minimum Windows sizes with long names/credits, an audio error and a populated list. | Sort, search and buttons remain reachable, rows stay virtualized with full tooltips and the song viewport remains usable; record actual Windows layout. |
 
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
@@ -865,13 +920,15 @@ The export checkpoint uses **`feat: export timed and plain lyrics`**. Stage the 
 
 The expanded-metadata checkpoint uses **`feat: expand track metadata and caching`**. It replaces five Java files: MiSPlayApp, model/Track, model/TrackMetadata, service/MetadataService and persistence/LibraryRepository. Stage those with README.md, CHANGELOG.md and docs/DEVELOPMENT.md. All other Java sources and pom.xml stay as supplied. The incremental ZIP includes SETUP.md, COMMIT_MESSAGE.txt and changes.diff against the supplied export-era project. Local schema-6 migration occurs when the new code opens the developer’s profile; no real user database was opened or changed during development here.
 
+The sorting checkpoint uses **`feat: add library and playlist sorting`**. Add model/TrackSort.java and replace MiSPlayApp.java, model/Playlist.java, service/LibraryService.java and persistence/LibraryRepository.java; stage those with README.md, CHANGELOG.md and docs/DEVELOPMENT.md. The incremental ZIP includes SETUP.md, COMMIT_MESSAGE.txt and changes.diff against the accepted expanded-metadata checkpoint. POM and the other production sources are unchanged. Back up the database with the app closed before the first local schema-7 launch; earlier schema-6 code cannot reopen it. Only disposable fixtures were migrated here; no user database or repository commit/push was performed.
+
 For later checkpoints, update `CHANGELOG.md` when functionality changes. Update the README for changed features, prerequisites or run instructions. Update this guide when responsibilities, workflows or verification change. Do not invent documentation changes just to fill a checklist.
 
 ## Upcoming implementation notes
 
 - Record local embedded/Musicolet checks M225–M248 and export checks M249–M272, including native dialogs and actual Windows playback. Plain export must never invent timestamps.
 - Run metadata checks M273–M296, including actual Yaezakura tags and Windows playback; generic all-value reading/tooltips do not prove that file-specific issue resolved.
-- Next add Added order/Title/Artist/Album sorting with A–Z/Z–A across All songs, Favorites and playlists, retaining addition sequence separately from temporary view sorts and the active queue. No date sorting.
+- Run sorting checks M297–M320 on Windows, including schema-7 backup/migration, both playlist orders and actual queue playback. Then build album/artist browsing from cached metadata; queue/context-menu management follows. No date sorting.
 - Use the supplied prototype for later Library/Albums/Artists/Playlists navigation, album grid/list/detail views, bottom transport and shared right-side Queue/Lyrics switching. Lyrics should be centre-aligned; plain text remains untimed. Queue/context-menu commands follow as their own checkpoint.
 - Theme requirements are black/charcoal, light text and grey secondary elements with a saved configurable accent colour; a colour-wheel control is feasible. Ratings are excluded throughout, even where shown in the prototype. Do not add the mockup’s date sort controls.
 - Keep original image aspect ratios. Mini/compact-player examples remain later design references, alongside tray/overlay work.
