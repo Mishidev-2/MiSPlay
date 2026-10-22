@@ -3,6 +3,7 @@ package com.misplay.view;
 import com.misplay.model.LyricLine;
 import com.misplay.service.AudioService;
 import com.misplay.service.LyricsService;
+import com.misplay.service.LyricsExportService;
 import javafx.animation.PauseTransition;
 import javafx.beans.binding.Bindings;
 import javafx.beans.property.IntegerProperty;
@@ -16,6 +17,8 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.Tooltip;
+import javafx.scene.control.Alert;
+import javafx.scene.control.ButtonType;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.HBox;
@@ -23,6 +26,11 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.scene.layout.StackPane;
 import javafx.util.Duration;
+import javafx.stage.FileChooser;
+
+import java.io.File;
+import java.util.function.Function;
+import java.util.function.Predicate;
 
 /** Lyrics follow the audio clock. Selection alone never changes playback. */
 public final class LyricsPane extends VBox implements AutoCloseable {
@@ -32,6 +40,10 @@ public final class LyricsPane extends VBox implements AutoCloseable {
     private final ListView<String> plainList = new ListView<>();
     private final Label status = new Label();
     private final Button reload = new Button("Reload lyrics");
+    private final Button export = new Button("Export lyrics");
+    private final LyricsExportService exporter = new LyricsExportService();
+    private final Function<LyricsExportService.Snapshot, File> chooseExportFile;
+    private final Predicate<File> confirmReplacement;
     private final IntegerProperty activeIndex = new SimpleIntegerProperty(-1);
     private final PauseTransition followDelay = new PauseTransition(Duration.millis(60));
     private final ChangeListener<Duration> clockListener;
@@ -42,9 +54,18 @@ public final class LyricsPane extends VBox implements AutoCloseable {
     private boolean closed;
 
     public LyricsPane(LyricsService lyrics, AudioService audio) {
+        this(lyrics, audio, null, null);
+    }
+
+    /** Hosts/tests may supply dialog callbacks; the normal app uses native Save As. */
+    public LyricsPane(LyricsService lyrics, AudioService audio,
+            Function<LyricsExportService.Snapshot, File> chooseExportFile,
+            Predicate<File> confirmReplacement) {
         super(8);
         this.lyrics = lyrics;
         this.audio = audio;
+        this.chooseExportFile = chooseExportFile == null ? this::showExportDialog : chooseExportFile;
+        this.confirmReplacement = confirmReplacement == null ? this::confirmReplacement : confirmReplacement;
         setPadding(new Insets(10, 0, 0, 0));
         setMinHeight(0);
         status.setId("lyrics-status");
@@ -57,7 +78,12 @@ public final class LyricsPane extends VBox implements AutoCloseable {
         reload.setMinWidth(VBox.USE_PREF_SIZE);
         reload.setDisable(true);
         reload.setOnAction(event -> lyrics.reload());
-        HBox header = new HBox(10, status, reload);
+        export.setId("export-lyrics");
+        export.setMinWidth(VBox.USE_PREF_SIZE);
+        export.disableProperty().bind(lyrics.loadingProperty().or(exporter.savingProperty()).or(
+                lyrics.linesProperty().emptyProperty().and(lyrics.plainLinesProperty().emptyProperty())));
+        export.setOnAction(event -> exportLyrics());
+        HBox header = new HBox(10, status, reload, export);
         header.setAlignment(Pos.CENTER_LEFT);
 
         Label hint = new Label();
@@ -168,8 +194,66 @@ public final class LyricsPane extends VBox implements AutoCloseable {
         // Let wrapped rows acquire their new heights before following after a resize.
         list.widthProperty().addListener(observable -> followAfterLayout());
         list.heightProperty().addListener(observable -> followAfterLayout());
-        getChildren().addAll(header, hint, lyricViews);
+        Label exportStatus = new Label();
+        exportStatus.setId("lyrics-export-status");
+        exportStatus.setMinWidth(0);
+        exportStatus.setMaxWidth(Double.MAX_VALUE);
+        exportStatus.textProperty().bind(exporter.messageProperty());
+        Tooltip exportDetails = new Tooltip();
+        exportDetails.textProperty().bind(exporter.messageProperty());
+        exportStatus.setTooltip(exportDetails);
+        exportStatus.visibleProperty().bind(exportStatus.textProperty().isNotEmpty());
+        exportStatus.managedProperty().bind(exportStatus.visibleProperty());
+        getChildren().addAll(header, hint, lyricViews, exportStatus);
         VBox.setVgrow(lyricViews, Priority.ALWAYS);
+    }
+
+    private void exportLyrics() {
+        if (closed || export.isDisabled()) {
+            return;
+        }
+        // Native dialogs run a nested event loop: capture before playback can advance.
+        LyricsExportService.Snapshot snapshot = lyrics.snapshotForExport();
+        File chosen = chooseExportFile.apply(snapshot);
+        if (chosen == null || closed) {
+            return;
+        }
+        try {
+            File target = LyricsExportService.targetPath(snapshot, chosen).toFile();
+            boolean replace = target.exists();
+            if (replace && !confirmReplacement.test(target)) {
+                return;
+            }
+            if (!closed) {
+                exporter.export(snapshot, target, replace);
+            }
+        } catch (IllegalArgumentException invalid) {
+            Alert error = new Alert(Alert.AlertType.ERROR, invalid.getMessage(), ButtonType.OK);
+            if (getScene() != null) {
+                error.initOwner(getScene().getWindow());
+            }
+            error.setHeaderText("Choose a lyric filename");
+            error.showAndWait();
+        }
+    }
+
+    private File showExportDialog(LyricsExportService.Snapshot snapshot) {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Export lyrics");
+        chooser.setInitialFileName(snapshot.suggestedFileName());
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
+                snapshot.isTimed() ? "LRC lyrics (*.lrc)" : "Text lyrics (*.txt)", "*" + snapshot.extension()));
+        return chooser.showSaveDialog(getScene() == null ? null : getScene().getWindow());
+    }
+
+    private boolean confirmReplacement(File target) {
+        Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION,
+                "Replace " + target.getName() + "?", ButtonType.YES, ButtonType.NO);
+        if (getScene() != null) {
+            confirmation.initOwner(getScene().getWindow());
+        }
+        confirmation.setHeaderText("A lyric file already exists");
+        return confirmation.showAndWait().orElse(ButtonType.NO) == ButtonType.YES;
     }
 
     /** Called before loading each audio file, including repeat and queue navigation. */
@@ -216,6 +300,9 @@ public final class LyricsPane extends VBox implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
+        export.disableProperty().unbind();
+        export.setDisable(true);
+        exporter.close();
         followDelay.stop();
         playbackAvailable = false;
         audio.currentTimeProperty().removeListener(clockListener);

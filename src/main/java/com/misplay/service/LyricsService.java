@@ -66,6 +66,13 @@ public final class LyricsService implements AutoCloseable {
         return loading.getReadOnlyProperty();
     }
 
+    public LyricsExportService.Snapshot snapshotForExport() {
+        if (closed || loading.get() || selectedPath == null) {
+            throw new IllegalStateException("Wait for lyrics to finish loading before exporting.");
+        }
+        return new LyricsExportService.Snapshot(selectedPath, lines, plainLines);
+    }
+
     public void showLyrics(File audioFile) {
         if (closed) {
             return;

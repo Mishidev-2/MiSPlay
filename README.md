@@ -2,7 +2,7 @@
 
 A personal Windows 11 desktop music player built with Java 25 and JavaFX. The project is developed in small increments, with an emphasis on understandable Java OOP, responsive controls and measured resource use.
 
-**Status:** MP3 prototype with sidecar and embedded lyrics, saved Favorites, manual playlists, library paths, metadata and playback preferences, background file-change checks, folder importing and embedded album artwork. The developer reports that sidecar LRC files work in their project. The new embedded-lyrics checkpoint passed development-harness checks; the complete target build, real-audio synchronization and compatibility with the developer’s Musicolet-edited files still need local verification. Windows packaging remains upcoming work.
+**Status:** MP3 prototype with sidecar/embedded lyrics and explicit lyric export, saved Favorites, manual playlists, library paths, metadata and playback preferences, background file-change checks, folder importing and embedded album artwork. The developer reports that sidecar LRC files work in their project. The export checkpoint passed 92 development-harness checks. The complete Java 25/JavaFX 25.0.2 Windows build, native Save As behavior, real-audio synchronization and compatibility with the developer’s Musicolet-edited files still need local verification. Windows packaging remains upcoming work.
 
 ## Current features
 
@@ -72,7 +72,9 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Read embedded ordinary text and LRC-formatted lyric text, plus supported binary synchronized ID3 lyrics with millisecond timestamps.
 - Display plain embedded lyrics in their own virtualized, wrapped list with a no-timestamps hint. Plain-row selection, clicks and Enter leave playback unchanged.
 - Recheck both sources on playback/reload, with source/status messages, Unicode support and stale-request guards across format changes.
-- Read lyrics without editing the MP3, creating sidecars or adding lyric data to SQLite.
+- Read lyrics without editing the MP3 or adding lyric data to SQLite.
+- Use **Export lyrics** to save the loaded result as UTF-8: synchronized rows become `.lrc`, while ordinary embedded words become `.txt` with paragraph breaks.
+- Choose a destination through Save As and confirm replacement of an existing lyric file. Saving runs in the background; accepted writes finish on normal close.
 
 ## Technology
 
@@ -105,7 +107,7 @@ The UI is constructed directly in Java; FXML is not used. The project has no `mo
 4. Expand **Plugins → javafx** and run **javafx:run**.
 5. Wait for the saved library data and settings to load; import, favorite, playlist and preference controls are gated during restoration. Use **Open MP3** to start a single song, or **Add MP3s** / **Add Folder** to populate All songs, then double-click a row or press Enter. Restoring saved data does not start audio.
 
-Maven's run process remains active while the application window is open. Closing the window stops audio and background readers; the database worker finishes accepted saves before the run exits.
+Maven's run process remains active while the application window is open. Closing the window stops audio and background readers; database and lyric-export workers finish accepted saves before the run exits.
 
 If standalone Maven is available on your terminal's `PATH`, run this from the project root:
 
@@ -189,7 +191,22 @@ Binary synchronized lyrics use millisecond timestamps. When a SYLT frame marks l
 
 For embedded reading, the leading ID3 tag is limited to 8 MiB including its header; a large embedded cover can make the whole tag exceed this limit even if its lyrics are small. Embedded text is limited to 262,144 Java characters, 10,000 lines/entries and 8,192 characters per line. A binary synchronized payload, including its description, is limited to 1 MiB. These are input/accepted-result bounds, not a total-memory guarantee; tag parsing can allocate temporary objects. A valid sidecar remains usable independently of the embedded tag.
 
-Lyric problems do not stop playback. Reads/reloads do not rewrite audio, create `.lrc` files or save lyrics in SQLite. There is no continuous file watcher, lyric cache, online lookup, plain external `.txt` fallback, tag editor or automatic timestamp generation. Export remains later work.
+Lyric problems do not stop playback. Reads/reloads do not rewrite audio, create `.lrc` files or save lyrics in SQLite. Files are written only after an explicit export. There is no continuous file watcher, lyric cache, online lookup, plain external `.txt` fallback, tag editor or automatic timestamp generation.
+
+### Exporting lyrics
+
+1. Load the song’s lyrics, then click **Export lyrics** in the Lyrics tab. The button is disabled before usable lyrics arrive, during a read and while an export is saving.
+2. Save As suggests the playing MP3’s basename with `.lrc` for synchronized rows or `.txt` for plain text. A missing extension is appended; an incompatible extension is rejected. Choose a destination, or cancel to leave files unchanged.
+3. Confirm replacement if the resolved lyric filename already exists. Windows may also ask through its native Save As dialog. Declining either confirmation leaves the old file intact.
+4. Read the result message below the lyrics; hover it for the complete message if a long filename is shortened. After a write error, choose a writable location and export again.
+
+The export captures the displayed result **before Save As opens**. If playback advances or lyrics reload while a dialog is open or the file is saving, the export keeps the original song’s text, basename suggestion and adjusted times. Playback controls and Reload lyrics remain available while the background write runs. Exporting does not seek, edit tags, alter the queue, update SQLite or add a library song. The original MP3 is protected from direct or existing hard-link replacement; directory/symbolic-link destinations are rejected.
+
+LRC output uses `[mm:ss.xxx]` with three millisecond digits and the current adjusted times. Already-applied offsets are not emitted again. Simultaneous translated lines receive the same timestamp on separate physical lines; a timed blank stays blank after its timestamp rather than exporting the display’s **♪** marker. Plain output retains the loaded rows and paragraph breaks without adding guessed timestamps. Both formats use UTF-8 without a BOM and LF line endings, with a final newline.
+
+Writes are staged in the destination directory before moving into place, so encoding/size/validation failures leave an existing file intact and do not leave a partial new lyric file. Output is limited to 1 MiB, 10,000 physical entries and 8,192 characters per physical line; the LRC line limit includes its timestamp. LRC minutes must fit 1–6 digits. An otherwise readable source can exceed an export bound after expansion; export fails rather than truncating it. Replacement uses an atomic move when supported and a regular replacement move otherwise; this is not a guarantee against forced termination or filesystem failure. Normal window closure drains an accepted export without waiting on the UI thread.
+
+To make an exported timed file the preferred source, save it beside the MP3 with the same basename and click **Reload lyrics**. Plain `.txt` exports are for reading or another editor; MiSPlay does not load them as external lyrics. Rename alone cannot create synchronization. Export preserves the loaded line-level result, not original tag descriptions, metadata headers, encoding, word-level markers or pre-offset timestamp spelling.
 
 ## Playback preferences
 
@@ -217,7 +234,8 @@ Only the shuffle switch is saved. A fresh queue can produce a new shuffled order
 | `src/main/java/com/misplay/service/LrcParser.java` | Bounded line-timed text parsing, offsets, sorting and simultaneous grouping |
 | `src/main/java/com/misplay/service/LyricsService.java` | Background source priority/fallback, status, immutable timed/plain views, latest-request guards and clock lookup |
 | `src/main/java/com/misplay/service/EmbeddedLyricsReader.java` | Bounded read-only ID3 text and synchronized-lyric extraction through Jaudiotagger |
-| `src/main/java/com/misplay/view/LyricsPane.java` | Separate virtualized timed/plain views, clock highlighting/following, reload and guarded timed seeking |
+| `src/main/java/com/misplay/service/LyricsExportService.java` | Immutable export snapshots, filename validation and bounded background UTF-8 writing with staging/close draining |
+| `src/main/java/com/misplay/view/LyricsPane.java` | Virtualized timed/plain views, clock following, reload, guarded seeks and export dialogs/status |
 | `src/main/java/com/misplay/model/` | Track metadata/status, folder-scan results and playback queue/repeat models |
 | `docs/DEVELOPMENT.md` | Architecture, manual checks and development conventions |
 | `docs/GIT_SETUP.md` | Initial commit and remote repository setup |
@@ -235,15 +253,17 @@ The LRC checkpoint passed 27 parser/model, 24 sidecar-service and 38 application
 
 The embedded checkpoint passed **40 reader, 23 source-coordination and 26 application/layout checks** (89 focused), plus all 177 existing LRC/Favorites checks: **266 total**. Independent ID3 fixtures used generated silent MP3 audio and covered ID3v2.2/2.3/2.4, Unicode/encodings, binary timing, UTF-16 descriptions, source priority, malformed/bounded inputs, format switches, read-only behavior, reloads, stale/close guards and rendered plain/timed views. The complete Java 25/JavaFX 25.0.2 Windows build, actual audio synchronization and the developer’s Musicolet files still need local checks M225–M248. The harness did not decode MP3s for playback or exercise the production shuffle algorithm.
 
+The export checkpoint passed **56 export/service-capture checks, 34 lyric-component UI/layout checks and 2 child-process exit checks: 92 total**. Coverage includes UTF-8/Unicode, millisecond/offset round trips, simultaneous/blank lines, plain paragraphs, extension and overwrite handling, limits, failure preservation/cleanup, source protection, snapshots across dialog/track changes, busy/retry states, timed seek/plain no-seek regression and normal-close draining. The three changed/new production classes compiled alongside the real unchanged lyric reader/parser/model using JDK 17/JavaFX 21.0.1 and an AudioService substitute. Rendered component layouts were inspected at 820×780 and 760×720. The earlier 266-check embedded/LRC/Favorites suite is historical and was **not rerun** for export. These results do not establish a complete target build, native Windows dialogs or actual MP3 decoding/synchronization. Run M249–M272 locally as well as pending embedded checks.
+
 ## Next milestone
 
-- Verify embedded lyrics with the updated Musicolet-edited MP3s on Windows, including timed/plain fallback and seeking. Explicit lyric export can follow as a separate checkpoint.
+- Verify embedded/Musicolet behavior and lyric export on Windows, including native Save As, replacement, Unicode paths and normal close. Record M225–M272 results before the next feature.
+- After that checkpoint, investigate richer metadata/multiple artists and the shortened artist display, then measure performance before the main visual redesign.
 
 ## Planned features
 
 - Playlist import/export improvements.
 - Additional metadata such as track number and improved handling of multiple artists.
-- Explicit embedded-lyric export to LRC when usable timestamps are present; plain-text export without inventing timing.
 - System tray controls and an optional mini-player/overlay.
 - A bundled Windows runtime and executable/installer through `jpackage`.
 - Manual or startup update checks.
@@ -253,7 +273,7 @@ The future Python LRC generator is a separate project. AI models are not part of
 ## Known limitations
 
 - MP3 is the current import/playback format; other audio formats are not part of this checkpoint.
-- Embedded lyrics currently cover supported MP3 ID3 fields, not every format supported by Musicolet. MPEG-frame-based SYLT timing, variant/language selection, external plain-text files, manual lyric-file selection, online lookup, word-level animation, tag editing, export and live watching are not implemented. File/tag/text/line/cue bounds do not cap total process memory.
+- Embedded lyrics currently cover supported MP3 ID3 fields, not every format supported by Musicolet. MPEG-frame-based SYLT timing, variant/language selection, external plain-text files, manual lyric-file selection, online lookup, word-level animation, tag editing and live watching are not implemented. File/tag/text/line/cue bounds do not cap total process memory.
 - Library paths/order, favorite membership, playlist names/membership/order, valid text metadata and playback preferences persist; the active queue, selected library view/tab/song, playback position, shuffled order, artwork cache and loaded lyrics are session-only. A new profile uses 50% / Repeat OFF / Shuffle OFF; saved choices override those defaults.
 - Playlists contain each path once and support manual single-song moves. Playlist import/export, drag ordering and library removal are not implemented. Saves replace a complete playlist snapshot per batch; large-playlist performance has not been profiled.
 - Favorites follows main-library insertion order and has no separate sorting or manual reordering. Accepted save batches replace its complete membership snapshot; large-favorites performance has not been profiled.
