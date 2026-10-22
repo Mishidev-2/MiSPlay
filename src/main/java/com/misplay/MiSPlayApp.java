@@ -7,6 +7,8 @@ import com.misplay.service.AudioService;
 import com.misplay.service.ArtworkService;
 import com.misplay.model.RepeatMode;
 import com.misplay.service.LibraryService;
+import com.misplay.service.LyricsService;
+import com.misplay.view.LyricsPane;
 import com.misplay.model.TrackMetadata;
 import com.misplay.model.Track;
 
@@ -42,6 +44,8 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.SelectionMode;
 import javafx.scene.control.Tooltip;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
 
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.MouseButton;
@@ -84,6 +88,8 @@ public class MiSPlayApp extends Application {
     private final LibraryService libraryService = new LibraryService();
     private final PlaybackQueue playbackQueue = new PlaybackQueue();
     private final ArtworkService artworkService = new ArtworkService();
+    private final LyricsService lyricsService = new LyricsService();
+    private LyricsPane lyricsPane;
 
     private StringBinding titleBinding;
     private StringBinding detailsBinding;
@@ -254,7 +260,11 @@ public class MiSPlayApp extends Application {
             errorLabel.setText(message);
             playButton.setDisable(true);
             pauseButton.setDisable(true);
+            if (lyricsPane != null) {
+                lyricsPane.playbackFailed();
+            }
         });
+        lyricsPane = new LyricsPane(lyricsService, audioService);
 
         Label timeLabel = new Label();
 
@@ -449,6 +459,8 @@ public class MiSPlayApp extends Application {
         Consumer<File> playFile = file -> {
             loadMetadata(file, trackLabel, metadataLabel);
             artworkService.showArtwork(file);
+            lyricsPane.beginTrack();
+            lyricsService.showLyrics(file);
             errorLabel.setText("");
             playButton.setDisable(false);
             pauseButton.setDisable(false);
@@ -917,14 +929,27 @@ public class MiSPlayApp extends Application {
         HBox nowPlayingRow = new HBox(16, coverPane, nowPlayingText);
         nowPlayingRow.setAlignment(Pos.CENTER_LEFT);
 
-        VBox root = new VBox(
-                10,
+        VBox libraryPane = new VBox(
+                6,
                 libraryViewControls,
                 searchField,
                 libraryStatusRow,
                 songList,
                 playlistSongControls,
-                playlistMessage,
+                playlistMessage
+        );
+        libraryPane.setPadding(new Insets(10, 0, 0, 0));
+        VBox.setVgrow(songList, Priority.ALWAYS);
+        TabPane mainTabs = new TabPane(
+                new Tab("Library", libraryPane), new Tab("Lyrics", lyricsPane)
+        );
+        mainTabs.setId("main-tabs");
+        mainTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        mainTabs.setMinHeight(280);
+
+        VBox root = new VBox(
+                8,
+                mainTabs,
                 nowPlayingRow,
                 timeLabel,
                 seekSlider,
@@ -935,7 +960,7 @@ public class MiSPlayApp extends Application {
                 errorLabel
         );
 
-        VBox.setVgrow(songList, Priority.ALWAYS);
+        VBox.setVgrow(mainTabs, Priority.ALWAYS);
         root.setAlignment(Pos.CENTER);
         root.setPadding(new Insets(20));
 
@@ -1109,6 +1134,10 @@ public class MiSPlayApp extends Application {
         }
 
         artworkService.close();
+        if (lyricsPane != null) {
+            lyricsPane.close();
+        }
+        lyricsService.close();
         libraryService.close();
 
         if (audioService != null) {

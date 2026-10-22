@@ -4,13 +4,13 @@
 
 MiSPlay is a personal Windows 11 desktop project developed in small, working increments. Each increment should have a clear behavior to verify. Keep the architecture understandable and add dependencies when a feature needs them.
 
-The current checkpoint includes MP3 playback, captured queues with repeat/shuffle, saved Favorites and manual playlists, library paths/order and text metadata, saved playback preferences, background cache validation, folder importing and embedded album artwork. SQLite schema 5 adds favorite membership while retaining cached tags, playlists and volume/repeat/shuffle choices. Sidecar LRC display is the next proposed checkpoint. Embedded lyrics, tray/overlay behavior, updates and Windows packaging remain future work.
+The current checkpoint includes MP3 playback, captured queues with repeat/shuffle, saved Favorites and manual playlists, library paths/order and text metadata, saved playback preferences, background cache validation, folder importing and embedded album artwork. SQLite schema 5 adds favorite membership while retaining cached tags, playlists and volume/repeat/shuffle choices. Sidecar LRC loading, synchronized line highlighting and click/Enter seeking are implemented in the current checkpoint; full target-build and real-audio Windows verification are pending. Embedded lyrics, tray/overlay behavior, updates and Windows packaging remain future work. Lyrics use local sidecars and do not change schema 5.
 
 ## Current architecture
 
 | Class | Owns | Does not own |
 | --- | --- | --- |
-| `MiSPlayApp` | Controls, Favorites/playlist views, row stars, dialogs, bindings, choosers, playback actions, delayed preference saves, startup guards and shutdown coordination | Audio decoding, tag parsing or SQL execution |
+| `MiSPlayApp` | Window/tabs, library controls/views, dialogs, bindings, choosers, playback/lyric integration, delayed preference saves, startup guards and shutdown coordination | Audio decoding, LRC/tag parsing or SQL execution |
 | `AudioService` | The current `MediaPlayer`, playback/seek/volume requests, callbacks, audio errors and disposal | Library imports, UI controls or metadata/artwork caching |
 | `LibraryService` | Observable tracks/playlists, immutable favorite state, editing rules, metadata validation/cache, workers, active/pending preference/playlist/favorite snapshots, restore/save scheduling and storage status | Audio playback, artwork caching or SQL execution |
 | `LibraryRepository` | Database schema/migration, complete startup snapshots and transactional path/cache/preference/playlist/favorite writes | JavaFX controls, worker scheduling, tag parsing or audio bytes |
@@ -21,12 +21,16 @@ The current checkpoint includes MP3 playback, captured queues with repeat/shuffl
 | `FolderScanTask` | Recursive folder traversal, discovered paths, counts and cancellation checks | Adding tracks to the library or changing playback |
 | `FolderScanResult` | An unmodifiable copy of discovered files and a skipped-entry count | Scan execution or library changes |
 | `ArtworkService` | Selected-song artwork properties, its worker, latest waiting request and bounded thumbnail cache | Audio playback, library metadata reads or remote-image fetching |
+| `LyricLine` | Immutable adjusted timestamp and text for one line or simultaneous group | File reading, controls or audio playback |
+| `LrcParser` | Pure line-timed text parsing, limits, global offsets, sorting and simultaneous grouping | File reading, JavaFX state or audio playback |
+| `LyricsService` | Loaded immutable line view/status, sidecar worker, latest waiting request and binary clock lookup | Controls, audio execution, online fetching or SQLite |
+| `LyricsPane` | Virtualized wrapped lyric rows, audio-clock highlighting, follow delay, reload and click/Enter seek requests | File parsing, audio decoding or database state |
 | `PlaybackQueue` | Captured original/active orders, position, navigation, repeat and shuffle rules | Controls, audio resources or file reading |
 | `PlaybackPreferences` | Immutable volume, repeat mode and shuffle choices, validation and defaults | Queue membership/order, playback position, controls or SQL |
 | `Playlist` | Immutable ID/name and normalized unique file paths in manual order | Track objects, observable editing state, playback execution or SQL |
 | `RepeatMode` | OFF, ALL and ONE choices | Queue navigation or playback execution |
 
-`LibraryRepository` also declares three nested transfer records: `CachedMetadata` contains tag strings and file attributes, `SavedTrack` contains a file and optional cache, and `LibraryState` contains copied track entries, preferences, copied playlists and an immutable favorite-file set loaded together. A null cache represents a cache miss when loading or a request to clear cached fields when saving. Favorites introduces no new model class.
+`LibraryRepository` also declares three nested transfer records: `CachedMetadata` contains tag strings and file attributes, `SavedTrack` contains a file and optional cache, and `LibraryState` contains copied track entries, preferences, copied playlists and an immutable favorite-file set loaded together. A null cache represents a cache miss when loading or a request to clear cached fields when saving. Favorites introduced no new model class. LRC adds `LyricLine`, `LrcParser`, `LyricsService` and `LyricsPane`, bringing the architecture table to 19 top-level classes. `LyricsService` also has a private nested `LoadResult` record for worker results.
 
 ### Startup and saved library
 
@@ -34,7 +38,7 @@ The current checkpoint includes MP3 playback, captured queues with repeat/shuffl
 
 `LibraryRepository.defaultDatabasePath()` uses `%LOCALAPPDATA%\MiSPlay\library.db`, falling back to `.misplay/library.db` under Java's `user.home` when `LOCALAPPDATA` is missing or blank. Its constructor normalizes the path without touching the disk. Opening a connection creates the parent directory and database when needed. No separate SQLite server or `module-info.java` is required; Maven supplies `sqlite-jdbc` 3.53.4.0 and runtime `slf4j-nop` 1.7.36. The launcher's native-access option includes `ALL-UNNAMED` for the JDBC dependency.
 
-Schema version 5 is recorded with `PRAGMA user_version`. Startup upgrades schemas 0â€“4 transactionally: schemas 0/1 receive cached-tag columns, earlier schemas gain preferences and playlist/membership tables when needed, and all gain a favorite-membership table. Saved paths, IDs, library order, valid caches, manual playlists and existing playback settings are not replaced. The track table remains:
+Schema version 5 is recorded with `PRAGMA user_version`. Startup upgrades schemas 0–4 transactionally: schemas 0/1 receive cached-tag columns, earlier schemas gain preferences and playlist/membership tables when needed, and all gain a favorite-membership table. Saved paths, IDs, library order, valid caches, manual playlists and existing playback settings are not replaced. The track table remains:
 
 ```sql
 CREATE TABLE IF NOT EXISTS library_tracks (
@@ -51,7 +55,7 @@ CREATE TABLE IF NOT EXISTS library_tracks (
 
 Metadata-cache format version 1 is separate from database schema version 5. Bump the cache-format constant when tag interpretation or fallback rules change, so older results become misses. Missing fields, negative sizes and unsupported cache-format versions are treated as uncached metadata rather than rejecting the saved paths.
 
-`loadState()` reads paths/caches with `ORDER BY id`, the preferences row, playlists/memberships by saved positions and favorite membership in one read transaction. It validates absolute paths and returns normalized files without checking existence or starting playback. On the JavaFX thread, `LibraryService` assigns preferences, registers Tracks, restores playlist/favorite snapshots and schedules background cache checks without reinserting paths. All restored state is assigned before `restoringLibrary` becomes false. The app applies preferences to audio/queue/controls under a guard suppressing save requests. The original insertion order becomes the library order; filesystem traversal order is not guaranteed for a newly imported folder. The initial view is All songs with an empty playback queue; restoring stars schedules no favorite write.
+`loadState()` reads paths/caches with `ORDER BY id`, the preferences row, playlists/memberships by saved positions and favorite membership in one read transaction. It validates absolute paths and returns normalized files without checking existence or starting playback. On the JavaFX thread, `LibraryService` assigns preferences, registers Tracks, restores playlist/favorite snapshots and schedules background cache checks without reinserting paths. All restored state is assigned before `restoringLibrary` becomes false. The app applies preferences to audio/queue/controls under a guard suppressing save requests. The original insertion order becomes the library order; filesystem traversal order is not guaranteed for a newly imported folder. The initial tab is Library, its view is All songs and its playback queue is empty; restoring stars schedules no favorite write.
 
 An initial restore/migration failure disables saving for that launch, displays a status message and enables temporary imports/playback/favorites/playlists/settings after loading finishes. An unreadable/corrupt database or schema version above 5 is not silently reset or replaced. Invalid playlist/favorite references, including orphan membership, also fail restoration instead of discarding data. Fix the storage problem and restart to retry restoration. Missing media paths retain library/playlist/favorite membership even if metadata or audio loading fails. Keep a database backup before upgrading; earlier application code cannot open schema 5.
 
@@ -71,9 +75,9 @@ Paths, library/playlist order, favorite membership, playlist IDs/names/membershi
 
 1. Open MP3 shows a file chooser. Cancelling leaves the library and playback unchanged.
 2. After restoration has finished, the selected file is imported through `LibraryService.addFiles`, preserving an existing Track for a known path. A new path queues metadata and a database save when persistence is available. `PlaybackQueue.start` creates a single-song queue.
-3. The shared `playFile` action binds the now-playing metadata labels, calls `ArtworkService.showArtwork`, clears the previous audio error and updates playback controls and the visible list selection.
+3. The shared `playFile` action binds now-playing metadata, calls `ArtworkService.showArtwork`, resets the lyric clock/highlight through `LyricsPane.beginTrack` and calls `LyricsService.showLyrics`. It clears the previous audio error and updates playback controls and the visible list selection. Previous lyrics disappear immediately while the new read runs.
 4. `AudioService.loadAndPlay` disposes of the previous player, creates `Media` from the file URI and creates a replacement `MediaPlayer` with its callbacks attached. The player receives the current restored or edited volume; 0.5 (50%) is the fallback when no valid saved volume exists.
-5. Playback is requested. JavaFX completes media preparation asynchronously; metadata and artwork can finish independently.
+5. Playback is requested. JavaFX completes media preparation asynchronously; metadata, artwork and sidecar lyrics can finish independently.
 
 Row activation, manual navigation and automatic advancement also use `playFile`. When the current song is visible in the filtered list, it is selected and scrolled into view.
 
@@ -81,7 +85,7 @@ Play and Pause delegate to service methods rather than maintaining a separate UI
 
 ### Error reporting
 
-The UI passes a `Consumer<String>` to `AudioService`. The service calls this callback with an error message; the UI displays it and disables the playback buttons. Selecting another file enables another playback attempt.
+The UI passes a `Consumer<String>` to `AudioService`. The service calls this callback with an error message; the UI displays it, disables the playback buttons and calls `LyricsPane.playbackFailed` to clear the active lyric highlight and prevent seeks against an obsolete duration. Loaded text can still be read/reloaded. Selecting another file enables another playback attempt.
 
 Synchronous construction failures are caught by `loadAndPlay`. Later media/player errors are handled by callbacks. `handleError` checks which player reported the error so an obsolete player cannot clear its replacement.
 
@@ -92,8 +96,9 @@ Synchronous construction failures are caught by `loadAndPlay`. Later media/playe
 - `LibraryService` owns the current launch's Track objects, path lookup, immutable playlist/favorite snapshots, metadata/scanning/database workers and active/pending save snapshots, including preferences, playlists and favorites.
 - `LibraryRepository` owns blocking SQL operations; each operation closes its statements and connection and runs on the database worker.
 - `ArtworkService` owns the artwork worker and thumbnail cache; Track metadata remains strings only.
+- `LyricsService` owns its daemon file worker and loaded line view; `LyricsPane` owns its clock/list listeners and one-shot follow delay.
 - `MiSPlayApp` owns the preference save delay and restoration/shutdown guards. Its stop method captures the latest settings before closing the library service.
-- `Application.stop()` also disposes of now-playing bindings, closes artwork/library services and disposes of the audio player.
+- `Application.stop()` also disposes of now-playing bindings, closes artwork/lyrics/library resources and disposes of the audio player.
 - Use file URIs for `Media`; do not construct media locations by manually concatenating Windows path separators.
 
 ### Volume control
@@ -201,7 +206,7 @@ The completion callback remains registered when individual players are replaced.
 
 The source list uses an extractor observing each track's `metadataProperty()`, so metadata changes produce list-update events.
 
-A `ListView<Track>` displays filtered/sorted entries through reusable cells with a fixed height of 32 pixels. Multiple selection supports Ctrl/Shift membership actions; playback activation uses the chosen row. Each populated cell binds its text to metadata and displays title â€” artist. Pending tracks use filename and Unknown artist fallbacks until their background read finishes; small files may update too quickly to observe the fallback.
+A `ListView<Track>` displays filtered/sorted entries through reusable cells with a fixed height of 32 pixels. Multiple selection supports Ctrl/Shift membership actions; playback activation uses the chosen row. Each populated cell binds its text to metadata and displays title — artist. Pending tracks use filename and Unknown artist fallbacks until their background read finishes; small files may update too quickly to observe the fallback.
 
 When a cell is reused, `updateItem` unbinds its text, disposes of its previous binding and clears empty-cell content before binding to another Track. Cell rendering uses in-memory values and does not read tags or decode artwork.
 
@@ -221,7 +226,7 @@ Changes to search results do not modify the captured playback queue or interrupt
 
 ### Manual playlists
 
-`Playlist` is an immutable record containing a stable string ID, trimmed name and copied normalized absolute file paths in manual order. Its constructor rejects blank IDs, blank/overlong names and duplicate normalized members. The app permits 1â€“100 name characters; service create/rename checks also reject case-insensitive duplicate names and reserve All songs. New saved IDs come from `UUID.randomUUID()`.
+`Playlist` is an immutable record containing a stable string ID, trimmed name and copied normalized absolute file paths in manual order. Its constructor rejects blank IDs, blank/overlong names and duplicate normalized members. The app permits 1–100 name characters; service create/rename checks also reject case-insensitive duplicate names and reserve All songs. New saved IDs come from `UUID.randomUUID()`.
 
 `LibraryService.getPlaylists()` exposes an unmodifiable observable list of immutable snapshots. `createPlaylist`, `renamePlaylist`, `deletePlaylist`, `addToPlaylist`, `removeFromPlaylist` and `movePlaylistTrack` own edits on the JavaFX thread and are gated during restoration. Added/removed Track arguments must be the service's canonical library objects. Adds use a `LinkedHashSet` to append once in supplied order; the UI supplies visible selection order. A single move swaps adjacent entries, with boundary moves and unchanged renames/duplicate adds producing no save.
 
@@ -293,7 +298,7 @@ The shared `playFile` action calls `loadMetadata`, covering Open MP3, row activa
 
 Requesting playback asks `LibraryService` to prioritize a metadata check after the current check/read finishes, including for loaded or failed Tracks. This catches edits or repaired files. Completed results update their own Track objects; labels observe only the selected Track, so another result cannot replace the current song's details. Already displayed values can remain visible while revalidation is pending.
 
-Check/read failures replace stale text with filename/Unknown fallbacks, mark the Track FAILED, queue a stored-cache clear and show `Tags unavailable â€” showing filename.` for the selected track. Exceptions are logged independently of audio errors.
+Check/read failures replace stale text with filename/Unknown fallbacks, mark the Track FAILED, queue a stored-cache clear and show `Tags unavailable — showing filename.` for the selected track. Exceptions are logged independently of audio errors.
 
 Known issue: Yaezakura displays a shortened artist/details line even though Windows Properties lists artist and album information. The cause remains undiagnosed and investigation is deferred.
 
@@ -345,29 +350,57 @@ Linked image URLs and external cover files are not loaded. Images that fail deco
 
 Successful and missing-cover results are session-only and do not detect file edits. A cached result can remain until eviction or restart. Metadata and artwork currently perform separate tag reads.
 
+### Sidecar LRC lyrics
+
+The shared playback action requests lyrics for the file actually being played, independently of library selection, search, Favorites or playlist membership. It runs for Open MP3, activated rows, Previous/Next, natural advancement and repeat. Merely browsing the library leaves playing lyrics alone. The Library and Lyrics tabs share the now-playing artwork/metadata, seek slider and playback/options/volume controls below them. Tabs are not closable; selected tab and loaded lyrics are session-only.
+
+`LyricsService.showLyrics(File)` normalizes the audio path and requests a sidecar in the same directory, replacing only the final extension with `.lrc`: `song.mix.MP3` becomes `song.mix.lrc`. Matching follows the host filesystem's case rules; there is no directory search or manual lyric chooser. Each playback request and Reload lyrics re-read the sidecar, including previously missing/failed files. Neither audio files nor sidecars are written. No schema change, lyric database cache, file watcher or online lookup is introduced.
+
+The JavaFX-facing service has read-only `linesProperty`, `messageProperty` and `loadingProperty`. Each published list is an unmodifiable observable view of a complete result. Loading first replaces old lines with an empty view and shows Loading lyrics. A missing file names the expected sidecar; a file without timed entries has a separate status; unreadable/invalid UTF-8 and exceeded limits produce recovery guidance. These statuses do not report an audio failure or stop playback. A failed audio request separately disables lyric seeking/highlighting while permitting text to remain readable.
+
+There is one active `Task<LoadResult>` and one replaceable waiting path. Every request increments an identifier, including reloads of the same path. A completion can publish only when its identifier is still current and the service is open. Rapid changes drop intermediate waiting songs; an older active read finishes without replacing the latest song's view. A same-path reload queued during a read still starts a fresh read after it. The worker reads/parses; result handlers publish on the JavaFX thread. Closure cancels the active task, discards waiting work and shuts down the worker without waiting on the UI thread.
+
+The reader accepts only a regular local sidecar, reads at most **1 MiB plus one detection byte**, closes the stream and decodes strictly as UTF-8. An optional initial UTF-8 BOM is removed by the parser. Oversized files are rejected without parsing them; invalid UTF-8 asks the user to resave as UTF-8. There is no legacy-encoding guess. Input limits do not establish a total-memory target or eliminate temporary parser/string allocations.
+
+`LrcParser.parse(String)` is pure Java. It accepts LF, CRLF or CR physical lines, surrounding whitespace and leading timestamps with **1–6 minute digits**, two second digits **00–59**, and an optional dot with **1–3 fraction digits**. Fraction digits represent tenths/hundredths/milliseconds. Consecutive timestamps repeat the remaining text at each time; every expanded entry counts toward the **10,000-entry** limit before grouping. A physical line longer than **8,192 characters** or an exceeded entry limit rejects the result rather than showing partial lyrics. Headers, untimed lines and invalid leading timestamps are ignored. Recognized enhanced `<time>` markers are removed from text, retaining line timing; word-level animation is not implemented.
+
+The last valid signed 32-bit `[offset:N]` tag applies globally, even if found after timed lines. Adjusted time is `max(0, rawMilliseconds - offsetMilliseconds)`: +500 shows a 2-second line at 1.5 seconds; -500 shows it at 2.5 seconds. Out-of-range/malformed offset tags are ignored. Integer arithmetic retains millisecond precision. Cues sort by adjusted timestamp, and equal-time text is joined with newlines in original source order so translations can appear together. Empty text at its own timestamp remains an entry and displays as **♪**, allowing an instrumental break to replace the prior words.
+
+`LyricLine` validates nonnegative adjusted time and non-null text. `LyricsService.indexAt(double)` binary-searches for the greatest loaded timestamp at or before elapsed milliseconds; it returns -1 before the first entry or for a negative/nonfinite clock. This handles backward seeks without relying on a monotonically advancing index. The final line remains active until another timestamp, track change or audio failure; an explicit timed blank can mark an outro.
+
+`LyricsPane` listens to `AudioService.currentTimeProperty` and the loaded-line property. It resets its stored clock to zero before each audio replacement, then follows finite clock updates; a load completing later uses the current clock. It changes the accented row only when the active index changes and requests scrolling without programmatically selecting a row. A **60 ms one-shot** follow delay lets wrapped virtualized rows acquire their heights after a jump/reload/resize. Width/height changes restart this delay; it is not a periodic clock poll. Manual scrolling is possible until the next line change or resize.
+
+List selection is independent of the active line. Only a primary single click on a nonempty cell or Enter on a selected row requests `AudioService.seek` at the adjusted time. Seeking requires an available audio attempt, a completed lyric read and a finite positive audio duration, and ignores cues beyond duration. Programmatic selection/highlighting, empty space and secondary clicks do not seek. Pausing does not disable seeking; the existing audio service owns the resulting playback/paused/completed behavior. The pane closes by stopping the delay, detaching external listeners, unbinding the list/status and disabling reload.
+
+The handoff's `examples/lyrics-demo.lrc` contains original demonstration text for a working test MP3. It is not a lyric source for a particular song. Embedded USLT/SYLT, plain-text fallback, exporting/editing lyrics and online retrieval remain later work.
+
 ### Threading
 
-JavaFX controls, observable library/playlist collections, Track properties, playback queue state and service scheduling state are updated on the JavaFX Application Thread. The public library/artwork methods are called from that thread. Database tasks receive immutable playlist snapshots rather than live observable collections.
+JavaFX controls, observable library/playlist collections, Track properties, playback queue state and service scheduling state are updated on the JavaFX Application Thread. The public library/artwork/lyrics methods are called from that thread. Database tasks receive immutable playlist snapshots rather than live observable collections.
 
 | Work | Owner | Background operation | Result applied on JavaFX thread |
 | --- | --- | --- | --- |
 | Metadata | `LibraryService` | One `Task<MetadataReadResult>` validates attributes and reuses cached strings or calls `MetadataService`. | Update that Track/cache/status, queue fresh/cleared metadata for saving and start the next check. |
 | Folder scan | `LibraryService` | One `FolderScanTask` traverses folders and collects paths/counts. | Import a successful result or display cancellation/failure without adding partial results. |
 | Artwork | `ArtworkService` | One `Task<Image>` reads, resizes and copies an embedded cover. | Update the bounded cache and display only a result for the selected path. |
+| Lyrics | `LyricsService` | One `Task<LoadResult>` reads bounded UTF-8 sidecar bytes and runs the pure parser. | Publish a complete immutable line view/status only for the current request, then start the latest waiting read. |
 | Database | `LibraryService` schedules `LibraryRepository` | One worker serializes migration, complete startup loading and transactional path/cache/preference/playlist/favorite writes. | Assign restored preferences/playlists/favorites before unlocking controls, register Tracks/cache candidates and update save state. |
+| Lyric clock/follow | `LyricsPane` | None; clock listeners and a 60 ms one-shot follow delay run on the JavaFX thread. | Binary-search the active timestamp, style/scroll virtualized rows and guard click/Enter seek requests. |
 | Preference delay | `MiSPlayApp` | None; a 250 ms `PauseTransition` runs on the JavaFX thread. | Capture the latest choices and enqueue an immutable save snapshot. |
 
-Metadata, folder scanning, artwork and database work use separate single-thread executors. The preference delay runs on the JavaFX thread and schedules SQL on the database worker. Background tasks return data without manipulating live controls or the observable library.
+Metadata, folder scanning, artwork, lyrics and database work use separate single-thread executors. The preference delay runs on the JavaFX thread and schedules SQL on the database worker. Background tasks return data without manipulating live controls or the observable library.
 
-Metadata priority changes the waiting deque without interrupting its current read. Artwork selection replaces its single waiting request without interrupting its current read. Result handlers check that the owning service remains open and their task is still active.
+Metadata priority changes the waiting deque without interrupting its current read. Artwork selection replaces its single waiting request without interrupting its current read. Lyrics also replaces its single waiting request, with a per-request identifier so an old same-path read cannot satisfy a reload. Result handlers check that the owning service remains open and their task is still active; lyrics additionally checks its request identifier.
 
 ### Application shutdown
 
-`MiSPlayApp.stop()` stops the preference delay, captures the latest choices when restoration has finished, sets its shutdown guard, disposes of now-playing bindings, closes `ArtworkService`, closes `LibraryService` and disposes of `AudioService`.
+`MiSPlayApp.stop()` stops the preference delay, captures the latest choices when restoration has finished, sets its shutdown guard, disposes of now-playing bindings, closes `ArtworkService`, closes `LyricsPane` and `LyricsService`, closes `LibraryService` and disposes of `AudioService`.
 
 Artwork closing clears its current-task reference, waiting path and cache, requests cancellation of the active task and shuts down its executor. Library closing clears waiting metadata, clears task references, requests cancellation of active metadata/scanning tasks, unbinds folder status and shuts down those two executors.
 
-Metadata, scanner and artwork workers are daemon threads. Cancellation is a request; closed/task-identity checks prevent late completions from updating the UI, including a database restore completing after close.
+Lyrics closing first stops the follow delay and detaches clock/list listeners, then cancels the active lyric task, drops waiting work and shuts down its worker.
+
+Metadata, scanner, artwork and lyrics workers are daemon threads. Cancellation is a request; closed/task-identity checks prevent late completions from updating the UI, including a database restore completing after close.
 
 The database worker is deliberately non-daemon. Closing does not cancel accepted database tasks. When persistence is enabled, a final save includes active/waiting paths, completed metadata changes and the newest pending preferences/playlists/favorites, falling back to active snapshots when no newer one exists. Empty membership snapshots are retained. `shutdown()` lets the worker drain before JVM exit. Repeating path inserts, preference upserts or the same membership snapshots leaves the same saved data. Failed-save changes are included; another failure is logged and is not claimed as saved. Unfinished/cancelled metadata reads can be rebuilt from saved paths next launch. Shutdown does not wait on the JavaFX thread. A lock can delay exit until its background timeout; forced termination bypasses normal draining.
 
@@ -385,9 +418,9 @@ The metadata-cache checkpoint added 30 focused checks: migration/rollback and re
 
 The preferences checkpoint passed a separate set of 70 checks: 35 model/repository checks, 16 settings/cache-coordination checks and 19 application checks. They covered schema 0/1/2 upgrades, retained caches, every repeat/shuffle combination, zero/full/decimal volume, malformed values, singleton-row enforcement, atomic rollback, startup gating, coalesced snapshots, first explicit playback volume, retry, immediate-close capture and failed-startup session use.
 
-The playlist checkpoint passed 150 checks: 26 playlist model/repository, 23 playlist coordination, 29 playlist application and 2 layout checks, plus the existing 70 preferences/cache checks. Coverage included schemas 0â€“3 upgrades and retained library IDs/caches/settings; copied/normalized membership; Unicode/quoted names; duplicate/no-op edits; shared/empty playlists; atomic rollback; missing/repaired media; blocked-save responsiveness; newest-state retry including deletion of the final playlist; immediate close after import/create/add; and session-only edits after failed startup. Application checks exercised the actual dialogs/buttons, name correction, multi-selection, view/selection preservation, moves, scoped/live search, rename/delete cancellation, filtered queue capture/navigation wiring and restart without autoplay. Rendered layout checks covered a maximum-length name at the default and minimum window sizes; an identified header-label squeeze was fixed. The existing harness song-list selector was updated to distinguish the dropdown's internal list.
+The playlist checkpoint passed 150 checks: 26 playlist model/repository, 23 playlist coordination, 29 playlist application and 2 layout checks, plus the existing 70 preferences/cache checks. Coverage included schemas 0–3 upgrades and retained library IDs/caches/settings; copied/normalized membership; Unicode/quoted names; duplicate/no-op edits; shared/empty playlists; atomic rollback; missing/repaired media; blocked-save responsiveness; newest-state retry including deletion of the final playlist; immediate close after import/create/add; and session-only edits after failed startup. Application checks exercised the actual dialogs/buttons, name correction, multi-selection, view/selection preservation, moves, scoped/live search, rename/delete cancellation, filtered queue capture/navigation wiring and restart without autoplay. Rendered layout checks covered a maximum-length name at the default and minimum window sizes; an identified header-label squeeze was fixed. The existing harness song-list selector was updated to distinguish the dropdown's internal list.
 
-Favorites passed 88 focused checks: 32 repository/migration, 20 service and 36 application/layout. They covered schemas 0â€“4 upgrades and retained data, a legacy manual playlist named Favorites, immutable/validated bulk edits, no-op suppression, mixed selection, stars, main-library order, scoped/live search, queue capture/navigation wiring, existing playlist dialogs/controls, blocked/failed saves and latest-empty retry, immediate close, unavailable/repaired media, failed-startup protection and readable default/minimum layouts. The earlier 150-check playlist suite was not rerun and remains a separate recorded result.
+Favorites passed 88 focused checks: 32 repository/migration, 20 service and 36 application/layout. They covered schemas 0–4 upgrades and retained data, a legacy manual playlist named Favorites, immutable/validated bulk edits, no-op suppression, mixed selection, stars, main-library order, scoped/live search, queue capture/navigation wiring, existing playlist dialogs/controls, blocked/failed saves and latest-empty retry, immediate close, unavailable/repaired media, failed-startup protection and readable default/minimum layouts. The earlier 150-check playlist suite was not rerun and remains a separate recorded result.
 
 Those persistence checks ran with JDK 17 and JavaFX 21.0.1. Production repository, LibraryService and application code were exercised with API substitutes for unchanged model/audio/metadata/folder components where full source was unavailable. They are separate development harnesses, not a committed test suite or proof of the complete Java 25/JavaFX 25.0.2 Windows application. Local Windows playback verification remains necessary for later changes.
 
@@ -396,6 +429,10 @@ For the preferences checks, all four changed/new classes and the existing Artwor
 For the playlist checks, the four changed/new classes compiled with the existing PlaybackPreferences and ArtworkService sources. Track, TrackMetadata, RepeatMode, audio, queue, metadata-reader and folder-task APIs were substitutes. The queue/audio fixtures verified capture/navigation requests and volume state without testing the actual shuffle implementation or MP3 playback. The harness files are not shipped as production sources.
 
 For Favorites, the three changed classes compiled with the unchanged Playlist, PlaybackPreferences and ArtworkService sources. Track, TrackMetadata, MetadataStatus, RepeatMode, audio, queue, metadata-reader and folder-task APIs were substitutes. Text fixtures exercised cache coordination; audio/queue spies verified requests without real MP3 decoding or the production shuffle algorithm. The same Java 17/JavaFX 21.0.1 harness limits apply, and the complete Java 25/JavaFX 25.0.2 Windows application still depends on local verification.
+
+For LRC, all five changed/new production classes compiled with the unchanged LibraryService, LibraryRepository, Playlist, PlaybackPreferences and ArtworkService. The checkpoint passed **27 parser/model, 24 lyrics-service and 38 application/layout checks**, plus the **32 repository, 20 library-service and 36 Favorites/application checks**: **177 total**. Focused cases covered fractional/long/repeated timestamps, simultaneous translations, blanks, global offsets/clamping, immutable results, Unicode/BOM, malformed input and bounds, same-path edits, missing/repaired sidecars, latest waiting requests, stale/close guards, clock boundaries/backward seeks, click/Enter adjusted seeks, unknown-duration/audio-error protection, library/queue independence, navigation, reload during playback, virtualized wrapped rows, default/minimum layout, following after resize, shutdown and restart without autoplay. Rendered snapshots exposed and helped fix a wrapped-row follow issue on resize; the final checks exclude hidden VirtualFlow reuse cells when judging visibility.
+
+The LRC harness used the same JDK 17/JavaFX 21.0.1 environment and API substitutes for unavailable unchanged Track/metadata/status/repeat/audio/queue/folder code. Audio spy methods supplied clocks/durations and recorded seek requests; they did not decode MP3s or verify the production queue's repeat/shuffle implementation. Full Java 25/JavaFX 25.0.2 compilation and actual Windows audio/LRC synchronization, paused/completed seek behavior and repeat modes remain pending locally. The older 150-check playlist suite was not rerun in this checkpoint.
 
 No committed automated project test suite or memory/CPU profiling baseline has been recorded. The Yaezakura metadata display issue remains unresolved.
 
@@ -495,7 +532,7 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M84 | Start another queue containing previously cached tracks. | Cached metadata remains available across queue changes. |
 | M85 | Exercise navigation, library search, volume, seeking, repeat and shuffle. | Existing playback and library behavior continues working. |
 | M86 | Restart with an unchanged successfully cached file already saved, without reimporting or playing it. | Its path is restored; background validation reuses saved metadata without tag parsing. |
-| M87 | Import new unplayed tagged tracks after restoration finishes. | Pending rows can show filename â€” Unknown artist, then update automatically without playback; small files may load too quickly to see the fallback. |
+| M87 | Import new unplayed tagged tracks after restoration finishes. | Pending rows can show filename — Unknown artist, then update automatically without playback; small files may load too quickly to see the fallback. |
 | M88 | Play a tagged song whose metadata is cached or still pending. | The row and now-playing labels use its metadata; unchanged cached values require an attribute check but no tag parse. |
 | M89 | Search a cached track by filename, title, artist and album. | Each field matches; case differences, surrounding whitespace and clearing the query work. |
 | M90 | Keep an artist query active and use Open MP3 on a new song by that artist. | Its row appears once metadata becomes available without editing the query. |
@@ -609,6 +646,30 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M198 | In a disposable harness, fail a favorite insert batched with path/cache/preferences/playlist changes. | The complete transaction rolls back, including snapshot deletion; invalid references do not cause partial state. |
 | M199 | Inspect default/minimum window sizes with a maximum-length manual-playlist label and favorite controls visible. | Star rows and all main action labels remain readable; only the dropdown name truncates as needed. |
 | M200 | Close a disposable harness during delayed favorite restoration. | No late favorite/model publication occurs and temporary empty defaults do not overwrite saved membership. |
+| M201 | Start from the accepted Favorites checkpoint, install the five LRC Java files and run the complete project with Java 25/JavaFX 25.0.2. | The project compiles and opens on Windows; Library and Lyrics tabs share usable playback controls. Record the target-build result. |
+| M202 | Open Lyrics before playing a song, then return to Library. | Lyrics is empty with initial guidance; Reload lyrics is disabled; no audio or database lyric write starts. |
+| M203 | Place a UTF-8 same-basename .lrc beside a working MP3, start it from a library row and open Lyrics. | Matching lines appear and the accented row follows real playback without changing queue membership. |
+| M204 | Use a Unicode/multiple-dot filename and an optional UTF-8 BOM. On Windows also try .LRC, then a mismatched basename or .lrc.txt. | The matching sidecar follows Windows case rules; Unicode displays correctly; mismatched names/extensions show missing-file guidance. |
+| M205 | Play without a sidecar, create the expected .lrc during playback and press Reload lyrics. | Missing guidance names the expected file; the new lines load while audio continues. |
+| M206 | Edit, delete and restore a sidecar during playback, using Reload lyrics and later replaying the same song. | Each explicit request rechecks the file, clears obsolete text immediately and recovers without restart or stale caching. |
+| M207 | Use whole seconds and 1/2/3 fraction digits, repeated out-of-order timestamp tags and untimed metadata lines. | Cues sort/expand at the specified millisecond times; headers and untimed text do not become lyric rows. |
+| M208 | Put original and translated lines at the same time, followed later by an empty timed line. | Simultaneous text shares a wrapped active row in file order; the later blank displays ♪ instead of holding earlier words. |
+| M209 | Put [offset:+500] after timed lines, then try -500 and a later valid replacement offset. | The last valid offset affects every cue; positive advances and negative delays by the stated milliseconds; seeking uses adjusted times. |
+| M210 | Use a positive offset moving several cues before zero and a malformed/out-of-range offset. | Pre-zero cues group at zero; malformed offset tags are ignored without timing overflow. |
+| M211 | Seek backward/forward with the main slider and restart the track, including before the first lyric time. | Highlight recomputes from the actual clock and clears before the first cue; it is not stuck at a later index. |
+| M212 | Single-click a lyric row, then select another with keyboard arrows and press Enter. | The click and Enter seek to their row times. Moving selection alone neither seeks nor changes the current-line highlight. |
+| M213 | Seek from lyrics while playing, paused and after natural completion of the final queue song. | Existing audio-service seek behavior works in all supported states; actual Windows behavior is recorded, not inferred from the spy. |
+| M214 | Try lyric actions before duration becomes available, with zero/unknown duration, after an audio failure and on a cue beyond duration. | No lyric seek occurs in those cases; audio failure clears the active highlight. A new working song permits seeks again. |
+| M215 | Use Previous/Next, natural advancement, Repeat One/All and a fresh Open MP3 queue with different/missing sidecars. | Every actual replacement/repeat reloads its own lyrics and resets the prior clock; missing sidecars never retain old words. |
+| M216 | Change search, View, favorites or playlist membership while another song plays; switch tabs repeatedly. | The active queue/audio/lyrics stay tied to the playing file; merely selecting a library row does not load its sidecar. |
+| M217 | Skip rapidly among sidecars while a read is delayed; also reload the same path while its older read is active in a disposable harness. | Only the latest request may publish; one latest waiting path is retained and same-path reload still reads afresh. |
+| M218 | Try empty/untimed-only, malformed-timestamp, malformed UTF-8 and unreadable sidecars, then repair and reload. | Distinct empty/recovery messages appear without stopping audio or showing partial stale lyrics; repaired UTF-8 input recovers. |
+| M219 | In disposable fixtures, exceed 1 MiB, 8,192 physical-line characters or 10,000 expanded timed entries, including repeated tags. | The whole lyric result is rejected with clear limit guidance. Exact supported boundaries remain usable. |
+| M220 | Load many original fixture lines with long wrapped text, jump far ahead/back and resize between default and minimum dimensions. | Current-line highlighting remains visible after layout settles; a virtualized subset of cells renders and shared controls/reload fit. |
+| M221 | Scroll lyrics manually without changing playback; click empty space or use a secondary click. | Manual browsing and nonactivation clicks do not seek. Following resumes on the next current-line change or resize. |
+| M222 | Close while a lyric read, waiting request or follow delay is active, then reopen. | No late lyric publication/scroll occurs after close; the new launch has empty lyrics, the Library tab and no autoplay. |
+| M223 | Inspect a disposable profile before/after lyric playback/reload, then verify Favorites/manual playlists/preferences after restart. | SQLite stays at schema 5; existing data survives. No lyric tables, persisted line snapshots or source-file edits appear. |
+| M224 | Play a supported enhanced LRC with leading line times plus `<word-time>` markers; also try embedded-only and untimed-only lyrics. | Recognized word markers are hidden and line-level timing remains; unsupported sources do not imply embedded/plain-text fallback. |
 
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
@@ -618,12 +679,12 @@ For a check failure, record the check ID, exact action, error text, JDK/JavaFX v
 
 A checkpoint is ready when its intended behavior works, relevant manual checks pass and the staged files describe one understandable change.
 
-At each checkpoint, the development handoff should state:
+Every implementation handoff must include the updated **README.md**, **CHANGELOG.md** and **docs/DEVELOPMENT.md**, together with the exact commit message. This is the standing user request; do not defer the documentation or message to a follow-up. The handoff should state:
 
 1. What is ready to commit.
 2. Which checks were run and which still need to be run locally.
 3. The exact proposed commit message.
-4. Which documentation to update, or that no documentation update is needed.
+4. Where to find all three updated documentation files supplied with the implementation.
 
 Suggested commit message format:
 
@@ -641,13 +702,13 @@ type: short description of the resulting behavior
 | `test` | Add meaningful verification |
 
 
-The Favorites checkpoint can use `feat: add persistent favorites` when its three changed Java files and documentation are committed together. If the feature code is already committed and only documentation remains, use `docs: document favorites`.
+The LRC checkpoint uses `feat: add synchronized sidecar lyrics` for its five changed/new Java files and updated documentation. The source handoff also includes SETUP.md, an original example sidecar and the same commit text. Run the complete Windows project and relevant manual checks before committing locally; the development harness does not establish that target-build result.
 
 For later checkpoints, update `CHANGELOG.md` when functionality changes. Update the README for changed features, prerequisites or run instructions. Update this guide when responsibilities, workflows or verification change. Do not invent documentation changes just to fill a checklist.
 
 ## Upcoming implementation notes
 
-- Proposed next: sidecar LRC display, with embedded-lyrics support in a later checkpoint.
+- First record local Windows LRC checks M201–M224; then consider embedded-lyrics support as the next checkpoint.
 - Keep favorite/playlist edits independent from the active playback queue; profile full-snapshot saving before optimizing large collections.
 - Keep database work and expensive file/image operations off the JavaFX Application Thread, applying observable-model changes on that thread.
 - Preserve stable Track identity and captured playback-queue behavior while adding persistence.
