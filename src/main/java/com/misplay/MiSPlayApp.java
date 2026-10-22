@@ -12,6 +12,8 @@ import com.misplay.view.LyricsPane;
 import com.misplay.model.TrackMetadata;
 import com.misplay.model.Track;
 import com.misplay.model.TrackSort;
+import com.misplay.model.LibraryBrowse.Mode;
+import com.misplay.view.LibraryBrowser;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -91,6 +93,7 @@ public class MiSPlayApp extends Application {
     private final ArtworkService artworkService = new ArtworkService();
     private final LyricsService lyricsService = new LyricsService();
     private LyricsPane lyricsPane;
+    private LibraryBrowser libraryBrowser;
 
     private StringBinding titleBinding;
     private StringBinding detailsBinding;
@@ -378,9 +381,9 @@ public class MiSPlayApp extends Application {
                 "Changes this view. Starting a song captures its displayed order."
         ));
         sortChooser.disableProperty().bind(libraryService.restoringLibraryProperty());
-        Map<String, TrackSort> viewSorts = new HashMap<>();
+        Map<LibraryBrowser.Context, TrackSort> viewSorts = new HashMap<>();
         boolean[] changingSort = {false};
-        HBox sortControls = new HBox(8, new Label("Sort:"), sortChooser);
+        HBox sortControls = new HBox(8);
         sortControls.setAlignment(Pos.CENTER_LEFT);
 
         FilteredList<Track> filteredTracks = new FilteredList<>(
@@ -394,6 +397,14 @@ public class MiSPlayApp extends Application {
         songList.setTooltip(new Tooltip(
                 "Double-click or press Enter to play. Use Ctrl/Shift to select songs."
         ));
+
+        libraryBrowser = new LibraryBrowser(libraryService.getTracks(), songList);
+        libraryBrowser.disableProperty().bind(libraryService.restoringLibraryProperty());
+        libraryBrowser.getModeChooser().disableProperty().bind(
+                libraryService.restoringLibraryProperty()
+        );
+        sortControls.getChildren().setAll(new Label("Browse:"), libraryBrowser.getModeChooser(),
+                new Label("Sort songs:"), sortChooser);
 
         BooleanBinding allSongsSelected = Bindings.createBooleanBinding(
                 () -> playlistChooser.getValue() == null
@@ -415,7 +426,12 @@ public class MiSPlayApp extends Application {
             try {
                 sortChooser.getItems().setAll(java.util.Arrays.stream(TrackSort.values())
                         .filter(mode -> manual || mode != TrackSort.PLAYLIST_ORDER).toList());
-                TrackSort remembered = viewSorts.getOrDefault(id, TrackSort.ADDED_ORDER);
+                TrackSort initial = switch (libraryBrowser.getMode()) {
+                    case SONGS -> TrackSort.ADDED_ORDER;
+                    case ALBUMS -> TrackSort.ALBUM_ASC;
+                    case ARTISTS -> TrackSort.TITLE_ASC;
+                };
+                TrackSort remembered = viewSorts.getOrDefault(libraryBrowser.contextFor(id), initial);
                 sortChooser.setValue(!manual && remembered == TrackSort.PLAYLIST_ORDER
                         ? TrackSort.ADDED_ORDER : remembered);
             } finally {
@@ -424,48 +440,68 @@ public class MiSPlayApp extends Application {
         };
         configureSortChoices.run();
 
+        boolean[] applyingLibraryView = {false};
         Runnable applyLibraryView = () -> {
-            var selection = java.util.Set.copyOf(songList.getSelectionModel().getSelectedItems());
-            Track selected = songList.getSelectionModel().getSelectedItem();
-            Playlist playlist = playlistChooser.getValue();
-            boolean showAll = allSongsSelected.get();
-            boolean showFavorites = favoritesSelected.get();
-            boolean showPlaylist = manualPlaylistSelected.get();
-            var favorites = libraryService.getFavoriteFiles();
-            Map<File, Integer> positions = new HashMap<>();
+            if (applyingLibraryView[0]) {
+                return;
+            }
+            applyingLibraryView[0] = true;
+            try {
+                var selection = java.util.Set.copyOf(songList.getSelectionModel().getSelectedItems());
+                Track selected = songList.getSelectionModel().getSelectedItem();
+                Playlist playlist = playlistChooser.getValue();
+                boolean showAll = allSongsSelected.get();
+                boolean showFavorites = favoritesSelected.get();
+                boolean showPlaylist = manualPlaylistSelected.get();
+                var favorites = libraryService.getFavoriteFiles();
+                Map<File, Integer> positions = new HashMap<>();
 
-            if (showPlaylist) {
-                for (int index = 0; index < playlist.files().size(); index++) {
-                    positions.put(playlist.files().get(index), index);
+                if (showPlaylist) {
+                    for (int index = 0; index < playlist.files().size(); index++) {
+                        positions.put(playlist.files().get(index), index);
+                    }
                 }
-            }
 
-            String query = searchField.getText().strip().toLowerCase(Locale.ROOT);
-            filteredTracks.setPredicate(track ->
-                    (showAll || (showFavorites && favorites.contains(track.getFile()))
-                            || (showPlaylist && positions.containsKey(track.getFile())))
-                            && track.matchesSearch(query)
-            );
-            List<File> addedFiles = showPlaylist ? playlist.addedFiles()
-                    : libraryService.getTracks().stream().map(Track::getFile).toList();
-            TrackSort mode = sortChooser.getValue() == null
-                    ? TrackSort.ADDED_ORDER : sortChooser.getValue();
-            visibleTracks.setComparator(mode.comparator(addedFiles,
-                    showPlaylist ? playlist.files() : addedFiles));
+                java.util.function.Predicate<Track> inScope = track -> showAll
+                        || (showFavorites && favorites.contains(track.getFile()))
+                        || (showPlaylist && positions.containsKey(track.getFile()));
+                String id = playlist == null ? allSongs.id() : playlist.id();
+                libraryBrowser.showScope(id, libraryService.getTracks().stream()
+                        .filter(inScope).toList());
+                var groupTracks = libraryBrowser.getSelectedTracks();
+                String query = searchField.getText().strip().toLowerCase(Locale.ROOT);
+                filteredTracks.setPredicate(track -> inScope.test(track)
+                        && (groupTracks == null || groupTracks.contains(track))
+                        && track.matchesSearch(query));
+                List<File> addedFiles = showPlaylist ? playlist.addedFiles()
+                        : libraryService.getTracks().stream().map(Track::getFile).toList();
+                TrackSort mode = sortChooser.getValue() == null
+                        ? TrackSort.ADDED_ORDER : sortChooser.getValue();
+                visibleTracks.setComparator(mode.comparator(addedFiles,
+                        showPlaylist ? playlist.files() : addedFiles));
 
-            songList.getSelectionModel().clearSelection();
-
-            int[] retained = java.util.stream.IntStream.range(0, visibleTracks.size())
-                    .filter(index -> selection.contains(visibleTracks.get(index))).toArray();
-            if (retained.length > 0) {
-                songList.getSelectionModel().selectIndices(retained[0],
-                        java.util.Arrays.copyOfRange(retained, 1, retained.length));
-            }
-            int lead = selected == null ? -1 : visibleTracks.indexOf(selected);
-            if (lead >= 0) {
-                songList.getSelectionModel().select(lead);
+                songList.getSelectionModel().clearSelection();
+                int[] retained = java.util.stream.IntStream.range(0, visibleTracks.size())
+                        .filter(index -> selection.contains(visibleTracks.get(index))).toArray();
+                if (retained.length > 0) {
+                    songList.getSelectionModel().selectIndices(retained[0],
+                            java.util.Arrays.copyOfRange(retained, 1, retained.length));
+                }
+                int lead = selected == null ? -1 : visibleTracks.indexOf(selected);
+                if (lead >= 0) {
+                    songList.getSelectionModel().select(lead);
+                }
+            } finally {
+                applyingLibraryView[0] = false;
             }
         };
+        libraryBrowser.selectedTracksProperty().addListener(
+                (observable, previous, current) -> applyLibraryView.run()
+        );
+        libraryBrowser.modeProperty().addListener((observable, previous, current) -> {
+            configureSortChoices.run();
+            applyLibraryView.run();
+        });
 
         // Edits replace immutable snapshots. Keep the view on the same playlist ID.
         boolean[] refreshingPlaylistChoices = {false};
@@ -496,7 +532,7 @@ public class MiSPlayApp extends Application {
         sortChooser.valueProperty().addListener((observable, previous, current) -> {
             if (!changingSort[0] && current != null) {
                 Playlist view = playlistChooser.getValue();
-                viewSorts.put(view == null ? allSongs.id() : view.id(), current);
+                viewSorts.put(libraryBrowser.contextFor(view == null ? allSongs.id() : view.id()), current);
                 applyLibraryView.run();
             }
         });
@@ -623,15 +659,25 @@ public class MiSPlayApp extends Application {
                                 return "This playlist is empty. Select All songs to add library songs.";
                             }
 
-                            return allSongsSelected.get() && libraryService.getTracks().isEmpty()
-                                    ? "Use Add MP3s or Add Folder to build your song list."
-                                    : "No songs match your search.";
+                            if (allSongsSelected.get() && libraryService.getTracks().isEmpty()) {
+                                return "Use Add MP3s or Add Folder to build your song list.";
+                            }
+
+                            if (libraryBrowser.getMode() != Mode.SONGS
+                                    && (libraryBrowser.getSelectedTracks() == null
+                                    || libraryBrowser.getSelectedTracks().isEmpty())) {
+                                return "Choose an album or artist from the group list.";
+                            }
+
+                            return "No songs match your search.";
                         },
                         libraryService.getTracks(),
                         playlistChooser.valueProperty(),
                         allSongsSelected,
                         favoritesSelected,
                         manualPlaylistSelected,
+                        libraryBrowser.modeProperty(),
+                        libraryBrowser.selectedTracksProperty(),
                         libraryService.favoriteFilesProperty(),
                         libraryService.restoringLibraryProperty()
                 )
@@ -811,27 +857,29 @@ public class MiSPlayApp extends Application {
         moveUpButton.disableProperty().bind(Bindings.createBooleanBinding(
                 () -> removeFromPlaylistButton.isDisabled()
                         || sortChooser.getValue() != TrackSort.PLAYLIST_ORDER
+                        || libraryBrowser.getMode() != Mode.SONGS
                         || !searchField.getText().isBlank()
                         || songList.getSelectionModel().getSelectedItems().size() != 1
                         || songList.getSelectionModel().getSelectedIndex() <= 0,
                 removeFromPlaylistButton.disableProperty(), searchField.textProperty(),
-                sortChooser.valueProperty(),
+                sortChooser.valueProperty(), libraryBrowser.modeProperty(),
                 songList.getSelectionModel().getSelectedItems(),
                 songList.getSelectionModel().selectedIndexProperty()
         ));
         moveDownButton.disableProperty().bind(Bindings.createBooleanBinding(
                 () -> removeFromPlaylistButton.isDisabled()
                         || sortChooser.getValue() != TrackSort.PLAYLIST_ORDER
+                        || libraryBrowser.getMode() != Mode.SONGS
                         || !searchField.getText().isBlank()
                         || songList.getSelectionModel().getSelectedItems().size() != 1
                         || songList.getSelectionModel().getSelectedIndex() >= visibleTracks.size() - 1,
                 removeFromPlaylistButton.disableProperty(), searchField.textProperty(),
-                sortChooser.valueProperty(),
+                sortChooser.valueProperty(), libraryBrowser.modeProperty(),
                 songList.getSelectionModel().getSelectedItems(),
                 songList.getSelectionModel().selectedIndexProperty(), visibleTracks
         ));
-        moveUpButton.setTooltip(new Tooltip("Choose Playlist order, select one song and clear search to reorder."));
-        moveDownButton.setTooltip(new Tooltip("Choose Playlist order, select one song and clear search to reorder."));
+        moveUpButton.setTooltip(new Tooltip("Choose Songs and Playlist order, select one song and clear search to reorder."));
+        moveDownButton.setTooltip(new Tooltip("Choose Songs and Playlist order, select one song and clear search to reorder."));
 
         addToPlaylistButton.setOnAction(event -> {
             List<Track> selected = songList.getSelectionModel().getSelectedIndices().stream()
@@ -862,6 +910,7 @@ public class MiSPlayApp extends Application {
 
             if (selected != null && manualPlaylistSelected.get()
                     && sortChooser.getValue() == TrackSort.PLAYLIST_ORDER
+                    && libraryBrowser.getMode() == Mode.SONGS
                     && searchField.getText().isBlank()) {
                 libraryService.movePlaylistTrack(playlistChooser.getValue().id(), selected, direction);
                 songList.getSelectionModel().clearSelection();
@@ -1009,12 +1058,12 @@ public class MiSPlayApp extends Application {
                 sortControls,
                 searchField,
                 libraryStatusRow,
-                songList,
+                libraryBrowser,
                 playlistSongControls,
                 playlistMessage
         );
         libraryPane.setPadding(new Insets(10, 0, 0, 0));
-        VBox.setVgrow(songList, Priority.ALWAYS);
+        VBox.setVgrow(libraryBrowser, Priority.ALWAYS);
         TabPane mainTabs = new TabPane(
                 new Tab("Library", libraryPane), new Tab("Lyrics", lyricsPane)
         );
@@ -1207,6 +1256,9 @@ public class MiSPlayApp extends Application {
             detailsBinding.dispose();
         }
 
+        if (libraryBrowser != null) {
+            libraryBrowser.close();
+        }
         artworkService.close();
         if (lyricsPane != null) {
             lyricsPane.close();

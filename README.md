@@ -2,7 +2,7 @@
 
 A personal Windows 11 desktop music player built with Java 25 and JavaFX. The project is developed in small increments, with an emphasis on understandable Java OOP, responsive controls and measured resource use.
 
-**Status:** MP3 prototype with Added order and Title/Artist/Album sorting across All songs, Favorites and playlists, independent saved playlist orders, expanded cached metadata, sidecar/embedded lyrics and lyric export, saved library/preferences, folder importing and artwork. All 22 production classes compile with Java 25/JavaFX 25.0.2 on Linux; this sorting checkpoint passed 173 focused checks. Windows Maven, real audio/synchronization and native-dialog checks remain local work. Album/artist browsing, queue management, the supplied prototype’s full UI and Windows packaging remain upcoming work.
+**Status:** MP3 prototype with searchable album/artist browsing within All songs, Favorites and playlists, Added order and Title/Artist/Album sorting, independent saved playlist orders, expanded cached metadata, sidecar/embedded lyrics and export, saved library/preferences, folder importing and artwork. All 24 production sources compile with Java 25/JavaFX 25.0.2 on Linux; this checkpoint passed 119 browsing checks plus 173 sorting regressions (292 total). Schema 7 and metadata-cache format 2 are unchanged. Windows Maven, real audio/synchronization and native-dialog checks remain local work. Queue management, the supplied prototype’s full visual design and Windows packaging remain upcoming work.
 
 ## Current features
 
@@ -35,7 +35,7 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Prioritize the selected song's pending metadata read after the current read finishes.
 - Display filename and Unknown artist/album fallbacks when tags are missing.
 - Search filenames, cached titles, every artist, album artists and albums, with results updating as metadata arrives.
-- Sort All songs, Favorites and playlists by Added order, Title, Artist or Album, with both A–Z and Z–A text directions. Each view remembers its choice during the session; new views and later launches start with Added order.
+- Sort All songs, Favorites and playlists by Added order, Title, Artist or Album, with both A–Z and Z–A text directions. Each View/Browse combination remembers its song sort during the session. Songs defaults to Added order, Albums to Album A–Z and Artists to Title A–Z; later launches start in All songs / Songs / Added order.
 - Reuse successful metadata across launches when file size and modification time still match, including successful missing-tag fallback values.
 - Check metadata on startup, playback requests and reimport; refresh edited files and allow repaired files to retry without restarting.
 
@@ -43,7 +43,7 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 
 `TrackMetadata` keeps immutable artist and album-artist lists. Separate `ARTISTS` / `ALBUM_ARTISTS` fields take priority when they contain usable values; otherwise the reader keeps every standard `ARTIST` / `ALBUM_ARTIST` value. Blank values are ignored, exact duplicates are removed in order and missing artists use Unknown artist. Display names join with `; `. Commas, slashes, ampersands, semicolons and “feat.” are not guessed as delimiters: they can be part of a real artist name. A single combined credit remains a single value unless the tag supplies separate values.
 
-Missing/blank title and album still use filename and Unknown album. Unknown track/disc numbers and duration are nullable, not zero or invented values; the current details line omits them. Track/disc totals are not stored in this checkpoint. Header duration is an estimate used before playback; the live seek slider continues to use MediaPlayer’s duration. Stored album artists prepare future browsing/grouping and are searchable; album/artist browsing screens are not implemented yet.
+Missing/blank title and album still use filename and Unknown album. Unknown track/disc numbers and duration are nullable, not zero or invented values; the current details line omits them. Track/disc totals are not stored in this checkpoint. Header duration is an estimate used before playback; the live seek slider continues to use MediaPlayer’s duration. Stored album artists provide album grouping/credits and are searchable. The Artists browser uses each stored track artist; album-artist-only values remain album credits.
 
 The earlier reader’s `getFirst(ARTIST)` discarded later stored artist values. This checkpoint uses all usable values and adds tooltips for visually shortened details, then refreshes old caches. These address general causes of shortened credits. Yaezakura’s actual tags have not been supplied, so verify that specific file locally before considering its reported issue resolved.
 
@@ -58,7 +58,7 @@ The earlier reader’s `getFirst(ARTIST)` discarded later stored artist values. 
 - Create, rename and delete playlists with saved names, membership, addition sequence and independent manual order, including empty playlists.
 - Switch between All songs and named playlists through the View dropdown; search within the selected view using the same library Track objects.
 - Use Ctrl/Shift selection to add several songs at once. New members append in visible order, duplicates are skipped, and a song can belong to several playlists.
-- Choose **Playlist order** to move one selected song up or down when search is clear. Returning to **Added order** restores its separate addition sequence. Shuffle still applies to playback when enabled.
+- Choose **Songs** and **Playlist order** to move one selected song up or down when search is clear. Returning to **Added order** restores its separate addition sequence. Shuffle still applies to playback when enabled.
 - Remove selected memberships or delete a playlist without deleting library songs or music files. Playlist deletion asks for confirmation.
 - Save through the existing background worker, Retry save action and normal-close flush.
 
@@ -132,7 +132,7 @@ IntelliJ's bundled Maven does not automatically make `mvn` available in PowerShe
 
 The database is `%LOCALAPPDATA%\MiSPlay\library.db` on Windows. If `LOCALAPPDATA` is unavailable, MiSPlay uses `.misplay/library.db` under Java's `user.home` directory. The directory and database are created automatically when needed.
 
-SQLite saves normalized absolute paths, insertion order, title, album, ordered artist/album-artist lists, optional track/disc numbers and header duration, plus each cached result's file size, modification time and cache-format version. It also stores favorite membership, playlist IDs/names/membership/manual order/addition sequence and volume, repeat mode and the shuffle switch. Audio files stay in their original locations. The playback queue, selected library view/tab/song, each view’s sort choice, playback position, shuffled order, artwork cache and loaded lyric lines remain session-only. Lyrics are read from local sidecars or the selected MP3’s tags and are not stored in SQLite.
+SQLite saves normalized absolute paths, insertion order, title, album, ordered artist/album-artist lists, optional track/disc numbers and header duration, plus each cached result's file size, modification time and cache-format version. It also stores favorite membership, playlist IDs/names/membership/manual order/addition sequence and volume, repeat mode and the shuffle switch. Audio files stay in their original locations. The playback queue, selected library view/tab/song, browse mode, group selection/search/direction, each View/Browse song-sort choice, playback position, shuffled order, artwork cache and loaded lyric lines remain session-only. Lyrics are read from local sidecars or the selected MP3’s tags and are not stored in SQLite.
 
 Schema **7** upgrades schemas 0–6 transactionally, preserving paths, IDs, library order, preferences, playlists and Favorites. It adds an independent playlist `added_position` alongside the saved manual `position`. Older versions never stored addition history: an existing playlist’s current saved order becomes its starting Added order. Earlier addition order cannot be reconstructed after past manual moves. New additions retain their sequence independently; removing and re-adding a song puts it at the end.
 
@@ -148,7 +148,7 @@ Missing, moved or temporarily unavailable files remain listed and saved. Failed 
 
 1. Click **New playlist**, enter a name and click OK. Names are trimmed, allow 1–100 characters and must differ from other playlist names without regard to case. **All songs** is reserved.
 2. Choose **All songs** from **View**, select songs with Ctrl/Shift, then click **Add to playlist...** and choose the destination. File/folder imports populate All songs; adding playlist membership is a separate action.
-3. Choose **Playlist: name** from View. It initially shows **Added order**. For manual moves, choose **Playlist order** in Sort, select one song and use **Move up** or **Move down** with an empty search field.
+3. Choose **Playlist: name** from View and **Songs** from Browse. It initially shows **Added order**. For manual moves, choose **Playlist order** in Sort songs, select one song and use **Move up** or **Move down** with an empty song-search field. Album/artist groups keep moves disabled because other playlist members are hidden.
 4. Double-click a song or press Enter to capture the current visible results for playback. Turn Shuffle OFF when checking manual playback order.
 5. Use **Rename**, **Remove from playlist** or **Delete playlist** as needed. Shared memberships and the main library remain available.
 
@@ -165,7 +165,7 @@ Built-in Favorites cannot be renamed or deleted. A manual **Playlist: Favorites*
 
 ## Sorting library views
 
-Choose a View, then use **Sort** above search. Text comparisons ignore case using a locale-neutral character comparison; they do not translate names, apply language-specific alphabet rules or sort embedded numbers naturally. Missing tags use the existing filename/Unknown fallbacks.
+Choose a View and Browse mode, then use **Sort songs** above search. Text comparisons ignore case using a locale-neutral character comparison; they do not translate names, apply language-specific alphabet rules or sort embedded numbers naturally. Missing tags use the existing filename/Unknown fallbacks.
 
 | Sort | Result |
 | --- | --- |
@@ -177,7 +177,22 @@ Choose a View, then use **Sort** above search. Text comparisons ignore case usin
 
 Album Z–A reverses album names while keeping disc/track order ascending within each album/album-artist group. Sorts read cached metadata; newly loaded or refreshed values can move a row. Search narrows the current sorted view. Visible selections stay selected when possible, and bulk Add to playlist follows their displayed order.
 
-Sort choices are remembered separately per view until the app closes. They do not save a new playlist order or change the current playback queue. Double-click or press Enter to capture the displayed sorted/filtered results for a new queue; Shuffle still applies when enabled. There is no date sorting or persistent sort preference in this checkpoint.
+Song-sort choices are remembered separately per View/Browse combination until the app closes. Songs defaults to Added order, Albums to Album A–Z and Artists to Title A–Z. They do not save a new playlist order or change the current playback queue. Double-click or press Enter to capture the displayed sorted/filtered results for a new queue; Shuffle still applies when enabled. There is no date sorting or persistent sort preference in this checkpoint.
+
+## Browsing albums and artists
+
+1. Choose the membership scope in **View**: All songs, Favorites or Playlist: name. Then choose **Albums** or **Artists** in **Browse**. The first available group opens without starting playback.
+2. Select a group on the left to see its songs on the right. Groups and song rows are virtualized; headings/rows have complete tooltips when text is shortened. Counts describe the whole selected group within View, before song search.
+3. Use **Find albums...** / **Find artists...** on the left to narrow group names or album credits. The adjacent **A–Z / Z–A** button orders that index. **Sort songs** controls the right-hand songs separately.
+4. The shared song-search field above both lists still matches filename, title, artists, album artists and album within the selected group. It stays in effect when View/Browse changes; clear it to see all group songs. A song search leaves the group index/counts intact.
+5. Double-click a song or select it and press Enter to capture that displayed group/song-search order for playback. Merely selecting a group does not play it. Enter in the group list moves focus to songs; a subsequent song activation starts playback.
+6. Favorite/Unfavorite and Add to playlist/Remove from playlist act on selected songs. Choose Browse: Songs for manual playlist moves. Changing groups, index direction, modes, scope or searches leaves an already captured queue intact.
+
+Albums group by album name plus the ordered album-artist credit, ignoring case. When album artists are absent, the full ordered track-artist credit is the fallback. Consistent album-artist tags join compilations with different performers; missing or inconsistent credits can split a release, while identical album/credit pairs share one group. This does not guess release IDs, folders or punctuation delimiters.
+
+Artists groups each separately stored track-artist value. A collaboration with distinct Alice and Bob values appears under both; a single combined `Alice feat. Bob` value stays one artist. Album-artist-only names do not add performer groups. Display spelling comes from the first scoped library member; case/Unicode comparisons do not transliterate names or remove accents. Unknown metadata uses the existing Unknown album/artist fallbacks and regroups when real metadata arrives.
+
+Index query, direction and selected group are remembered per View/Browse combination for the session. The current Browse mode continues across View switches. Metadata regrouping coalesces completions over about 100 ms; choosing a different scope updates membership immediately. No tag/file reads, artwork decoding or database writes are added by browsing. Restart rebuilds indexes from cached metadata, resets browsing controls and leaves playback stopped. This checkpoint retains schema **7** and metadata-cache format **2**.
 
 ## Using lyrics
 
@@ -257,6 +272,8 @@ Only the shuffle switch is saved. A fresh queue can produce a new shuffled order
 | `src/main/java/com/misplay/model/PlaybackPreferences.java` | Immutable volume, repeat-mode and shuffle choices with safe defaults |
 | `src/main/java/com/misplay/model/Playlist.java` | Immutable playlist ID/name and matching unique paths in manual and addition orders |
 | `src/main/java/com/misplay/model/TrackSort.java` | View-sort choices and cached-metadata comparators with stable addition-order ties |
+| `src/main/java/com/misplay/model/LibraryBrowse.java` | Pure cached-metadata album/artist grouping with structured case-folded keys and copied membership |
+| `src/main/java/com/misplay/view/LibraryBrowser.java` | Browse controls, scoped virtualized group index/detail, session state and coalesced metadata regrouping |
 | `src/main/java/com/misplay/service/MetadataService.java` | Read-only tag/header extraction, ordered artist values, optional numbers/duration and fallbacks |
 | `src/main/java/com/misplay/service/FolderScanTask.java` | Background folder traversal, counts and cancellation checks |
 | `src/main/java/com/misplay/service/ArtworkService.java` | Selected-song artwork loading, thumbnail caching and display properties |
@@ -277,6 +294,8 @@ Only the shuffle switch is saved. A fresh queue can produce a new shuffled order
 
 Run the [manual checks](docs/DEVELOPMENT.md#manual-checks) relevant to each change. Working checkpoints have been reported by the developer; the complete per-check results have not been recorded. Automated project tests and a memory/CPU profiling baseline have not been introduced yet.
 
+The browsing checkpoint passed **30 grouping-model, 24 browser-component, 53 actual application UI and 12 layout checks: 119 focused checks**. The previous **173 sorting checks were rerun: 292 total**. All 24 production sources compiled directly with Azul OpenJDK 25.0.3 / JavaFX 25.0.2 and the existing dependencies; no production class was substituted. Linux headless Monocle 21.0.2 tests cover structured/Unicode keys, compilations and fallback credits, multi-artist membership, scoped index queries/direction/session restoration, live model regrouping, close guards, sorting/moves/bulk-add, actual captured-queue Enter/Next wiring, empty profiles and restart without autoplay. Layouts were inspected at 820×780 and 760×720 with 240 tracks, 161 groups, an 80-song album, long credits and an audio error. Cached fixtures/direct model updates exercise regrouping; invalid media exercise audio errors, not real MP3 decoding. Windows Maven/audio/native dialogs, the actual Musicolet/Yaezakura files and profiling remain local checks M321–M344 plus relevant earlier cases. Metadata/lyric/export suites below were not rerun for browsing.
+
 The sorting checkpoint passed **35 model, 61 repository/migration, 24 service, 45 application UI and 8 layout checks: 173 total**. All 22 actual production classes compiled directly with Azul OpenJDK 25.0.3 / JavaFX 25.0.2 and the project dependencies. Linux headless Monocle 21.0.2 tests used real SQLite and production services/models, including the actual queue; no production substitute was used. Checks cover all sort modes, schemas 0–6, retained cache-format-2 data, independent playlist orders, migration/write rollback, newest-state retry/close, scoped search, live metadata resorting, selections, the actual bulk-add dialog and Enter/Next queue wiring. Rendered 820×780 and 760×720 layouts were inspected with 240 tracks and long credits. Invalid/missing media fixtures exercised audio-error handling, not real MP3 playback. Windows Maven/audio/native-dialog checks and profiling remain pending; run M297–M320 and relevant earlier checks locally. Earlier metadata/lyric/export test totals below are historical and were not rerun for sorting.
 
 The development guide distinguishes the manual checklist from development-time artwork, metadata, persistence and UI checks. Favorites passed 32 repository/migration, 20 service and 36 application/layout checks: 88 in total. The earlier playlist checkpoint's 150 checks are a separate recorded result and are not claimed as rerun for Favorites. These used a Java 17/JavaFX 21.0.1 harness with some substitute classes, so they do not establish a full Java 25/JavaFX 25.0.2 Windows build or audio regression result. A successful Maven validation alone does not compile the application or verify playback.
@@ -291,14 +310,14 @@ The expanded-metadata checkpoint passed **31 model/reader, 45 repository/migrati
 
 ## Next milestone
 
-- Install sorting over the working expanded-metadata checkpoint, back up the database and record Windows checks M297–M320. Keep pending metadata checks M273–M296 (including Yaezakura) and lyric/export checks M225–M272.
-- Next build album/artist browsing using the cached metadata, then queue/context-menu actions.
+- Install browsing over the working sorting checkpoint and record Windows checks M321–M344, alongside relevant sorting, metadata and lyric/export cases.
+- Next add queue/context-menu actions using the captured playback queue.
 - Measure performance before the main visual redesign based on the supplied prototype.
 
 ## Planned features
 
 - Playlist import/export improvements.
-- Album/artist browsing and additional list/grid views.
+- Album artwork grids and additional visual list/detail layouts based on the supplied prototype.
 - Queue management through context menus and the queue view.
 - The supplied prototype’s navigation and bottom player, a shared Queue/Lyrics sidebar with centred lyrics, black/light/grey base colours and a saved configurable accent colour. Ratings and date-based sort controls are excluded.
 - System tray controls and an optional mini-player/overlay.
@@ -311,10 +330,11 @@ The future Python LRC generator is a separate project. AI models are not part of
 
 - MP3 is the current import/playback format; other audio formats are not part of this checkpoint.
 - Embedded lyrics currently cover supported MP3 ID3 fields, not every format supported by Musicolet. MPEG-frame-based SYLT timing, variant/language selection, external plain-text files, manual lyric-file selection, online lookup, word-level animation, tag editing and live watching are not implemented. File/tag/text/line/cue bounds do not cap total process memory.
-- Library import order, favorite membership, playlist names/membership/manual order/addition sequence, valid text metadata and playback preferences persist; each view’s sort choice, the active queue, selected library view/tab/song, playback position, shuffled order, artwork cache and loaded lyrics are session-only. A new profile uses 50% / Repeat OFF / Shuffle OFF; saved choices override those defaults.
+- Library import order, favorite membership, playlist names/membership/manual order/addition sequence, valid text metadata and playback preferences persist; browse mode/group/query/direction, each View/Browse song-sort choice, the active queue, selected library view/tab/song, playback position, shuffled order, artwork cache and loaded lyrics are session-only. A new profile uses 50% / Repeat OFF / Shuffle OFF; saved choices override those defaults.
 - Playlists contain each path once and support manual single-song moves. Playlist import/export, drag ordering and library removal are not implemented. Saves replace a complete playlist snapshot per batch; large-playlist performance has not been profiled.
 - Favorites Added order follows main-library import order, not favorite-marking time; text sorting is available but manual reordering is not. Accepted save batches replace its complete membership snapshot; large-favorites performance has not been profiled.
-- Sort choices reset after restart. Upgraded playlists begin their addition sequence from the saved order available at migration; previously unrecorded addition history cannot be recovered. Language-specific collation and natural-number text sorting are not implemented.
+- Browse controls and song-sort choices reset after restart. Album grouping uses names and ordered credits, without release IDs/folder heuristics; Artists uses track artists rather than album-artist-only credits. Artwork grids, artist album subpages and group-wide context menus are future UI work.
+- Upgraded playlists begin their addition sequence from the saved order available at migration; previously unrecorded addition history cannot be recovered. Language-specific collation and natural-number text sorting are not implemented.
 - Moved/deleted paths remain in the library. Background metadata validation detects unavailable files, but paths are not repaired automatically.
 - Title and album use the first usable values; artist lists use the documented structured/standard-field priority. Combined credits are not heuristically split. Header duration can differ from live playback duration. The actual Yaezakura file remains unverified; full artist reading and tooltips are implemented, but its specific issue is not claimed resolved.
 - Text metadata is checked on startup, playback requests and reimport. There is no continuous file watcher or content hash; edits preserving both size and modification time can evade detection. Previous values can remain visible while a background check is pending.

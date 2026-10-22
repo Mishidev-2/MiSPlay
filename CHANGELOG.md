@@ -82,6 +82,12 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Separate saved addition/manual playlist sequences, a manual-only Playlist order mode and per-view sort choices remembered for the session.
 - Transactional schema 7 upgrades from schemas 0–6, adding validated/unique playlist addition positions while retaining library IDs/order, valid cache-format-2 metadata, settings and Favorites. Existing saved manual order seeds previously unrecorded addition history.
 
+- Album/artist browsing within All songs, Favorites and manual playlists, using cached metadata and canonical Track objects.
+- Structured case-folded album keys based on album name plus ordered album-artist credit, with complete track-artist fallback; compilations and same-title/different-credit releases retain defined grouping.
+- Individual stored track-artist groups, preserving literal combined credits and Unicode/punctuation without guessed splitting.
+- A virtualized group index/detail split, independent group Find and A–Z/Z–A index ordering, full-scope counts, complete tooltips and group Enter focus transfer without autoplay.
+- Per-View/Browse session query, index direction, group selection and song-sort state, plus coalesced metadata-driven regrouping and close cleanup. No schema/cache/dependency change: schema 7 and metadata-cache format 2 remain current.
+
 ### Changed
 
 - Metadata scheduling is owned by `LibraryService`. Changing songs prioritizes a waiting read without cancelling the active read; now-playing labels observe only the selected track.
@@ -107,10 +113,16 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - The first-value artist-reading limitation is removed and obsolete caches are refreshed. The developer’s specific Yaezakura tags are still unverified; no file-specific fix is claimed.
 
 - Sort changes preserve visible multiselection and the lead Track. Search follows the selected comparator; metadata updates resort through the existing extractor, and imports rebuild stable position maps.
-- New playlist members append to both saved sequences; moves affect manual order only, renames retain both and remove/re-add appends a fresh membership. Move controls require Playlist order, one selection and blank search.
-- Each view initially uses Added order; later launches reset view-sort choices without autoplay. Favorites Added order remains main-library import order. No date sorting, rating controls or dependency changes are introduced.
+- New playlist members append to both saved sequences; moves affect manual order only, renames retain both and remove/re-add appends a fresh membership. Move controls require Browse: Songs, Playlist order, one selection and blank song search; group views keep moves disabled while other members are hidden.
+- New Songs contexts use Added order, Albums use Album A–Z and Artists use Title A–Z. Song sorts are independent per View/Browse context; index direction is separate. Later launches reset to All songs / Songs / Added order without autoplay. Favorites Added order remains main-library import order. No date sorting, rating controls or dependency changes are introduced.
+
+- Scope/group membership and song search compose in the existing FilteredList; song activation captures only displayed group/search results, while later browser/index/scope/metadata/membership changes preserve the active queue.
+- Group selection survives matching keys across metadata rebuilds and scope renames; removed/filtered groups choose the first remaining match or clear detail. Empty library/playlist/favorite/group states have appropriate guidance.
+- Group headings retain two lines with counts before long credits; the app closes its regroup timer/source listener before shutting down library work. Artwork grids and the prototype's full theme/navigation remain later visual work.
 
 ### Verification
+
+- Browsing passed 30 model, 24 component, 53 actual App UI and 12 layout checks (119 focused), plus all 173 sorting regressions (292 total). All 24 actual production sources compiled directly with Azul OpenJDK 25.0.3 / JavaFX 25.0.2 and existing dependencies. Real SQLite and Linux headless Monocle 21.0.2 tests cover structured/Unicode grouping, compilation/fallback credits, per-artist collaboration membership, scoped queries/direction/state, live model regrouping, close guards, actual bulk-add, grouped move guards, production Enter/Next queue wiring, empty profiles and no startup autoplay. Default 820×780 and exact minimum 760×720 layouts were inspected with 240 tracks, 161 groups, an 80-song detail, long names/credits and an audio error. Cached fixtures/direct model changes exercise regrouping; invalid media tests do not establish actual MP3 decoding or Windows behavior. Earlier metadata/lyric/export suites were not rerun. Windows checks M321–M344, actual Musicolet/Yaezakura files and CPU/RAM profiling remain local work.
 
 - Sorting passed 35 model, 61 repository/migration, 24 service, 45 application UI and 8 layout checks (173 total). All 22 actual production sources compiled directly with Azul OpenJDK 25.0.3 / JavaFX 25.0.2 and the project dependencies. Real SQLite and headless Monocle 21.0.2 checks cover all modes/ties, schemas 0–6, independent orders, retained metadata/settings/Favorites, rollback, invalid addition positions, failed/newest-empty retry, active/waiting close saves, session protection, search/live metadata, selection, actual bulk-add dialogs, production queue Enter/Next wiring and default/minimum layouts with 240 rows/long credits. Invalid/missing media exercised audio-error handling; real MP3 output and native Windows dialogs were not verified. Earlier checkpoint suites were not rerun. Windows checks M297–M320 and profiling remain pending.
 
