@@ -4,16 +4,16 @@
 
 MiSPlay is a personal Windows 11 desktop project developed in small, working increments. Each increment should have a clear behavior to verify. Keep the architecture understandable and add dependencies when a feature needs them.
 
-The current checkpoint includes MP3 playback, captured queues with repeat/shuffle, saved manual playlists, library paths/order and text metadata, saved playback preferences, background cache validation, folder importing and embedded album artwork. SQLite schema 4 adds saved playlist names/membership/order while retaining cached tags and volume/repeat/shuffle choices. Favorites are the next proposed checkpoint. Lyrics, tray/overlay behavior, updates and Windows packaging remain future work.
+The current checkpoint includes MP3 playback, captured queues with repeat/shuffle, saved Favorites and manual playlists, library paths/order and text metadata, saved playback preferences, background cache validation, folder importing and embedded album artwork. SQLite schema 5 adds favorite membership while retaining cached tags, playlists and volume/repeat/shuffle choices. Sidecar LRC display is the next proposed checkpoint. Embedded lyrics, tray/overlay behavior, updates and Windows packaging remain future work.
 
 ## Current architecture
 
 | Class | Owns | Does not own |
 | --- | --- | --- |
-| `MiSPlayApp` | Controls, playlist dialogs/views, bindings, choosers, playback actions, delayed preference saves, startup guards and shutdown coordination | Audio decoding, tag parsing or SQL execution |
+| `MiSPlayApp` | Controls, Favorites/playlist views, row stars, dialogs, bindings, choosers, playback actions, delayed preference saves, startup guards and shutdown coordination | Audio decoding, tag parsing or SQL execution |
 | `AudioService` | The current `MediaPlayer`, playback/seek/volume requests, callbacks, audio errors and disposal | Library imports, UI controls or metadata/artwork caching |
-| `LibraryService` | Observable tracks/playlists, editing rules, metadata validation/cache, workers, current/active/pending preferences/playlists, restore/save scheduling and storage status | Audio playback, artwork caching or SQL execution |
-| `LibraryRepository` | Database schema/migration, complete startup snapshots and transactional path/cache/preference/playlist writes | JavaFX controls, worker scheduling, tag parsing or audio bytes |
+| `LibraryService` | Observable tracks/playlists, immutable favorite state, editing rules, metadata validation/cache, workers, active/pending preference/playlist/favorite snapshots, restore/save scheduling and storage status | Audio playback, artwork caching or SQL execution |
+| `LibraryRepository` | Database schema/migration, complete startup snapshots and transactional path/cache/preference/playlist/favorite writes | JavaFX controls, worker scheduling, tag parsing or audio bytes |
 | `Track` | A file, observable metadata/status and normalized search matching | File reading, worker scheduling or controls |
 | `TrackMetadata` | Immutable title, artist and album strings | Parser objects, artwork or loading state |
 | `MetadataStatus` | PENDING, LOADING, LOADED and FAILED states | Worker execution or persistence |
@@ -26,15 +26,15 @@ The current checkpoint includes MP3 playback, captured queues with repeat/shuffl
 | `Playlist` | Immutable ID/name and normalized unique file paths in manual order | Track objects, observable editing state, playback execution or SQL |
 | `RepeatMode` | OFF, ALL and ONE choices | Queue navigation or playback execution |
 
-`LibraryRepository` also declares three nested transfer records: `CachedMetadata` contains tag strings and file attributes, `SavedTrack` contains a file and optional cache, and `LibraryState` contains copied track entries, preferences and copied playlist snapshots loaded together. A null cache represents a cache miss when loading or a request to clear cached fields when saving.
+`LibraryRepository` also declares three nested transfer records: `CachedMetadata` contains tag strings and file attributes, `SavedTrack` contains a file and optional cache, and `LibraryState` contains copied track entries, preferences, copied playlists and an immutable favorite-file set loaded together. A null cache represents a cache miss when loading or a request to clear cached fields when saving. Favorites introduces no new model class.
 
 ### Startup and saved library
 
-`MiSPlayApp` shows the window, then calls `LibraryService.restoreLibrary()` once. Loading runs on a dedicated database worker. Import, playlist/view and preference controls are gated until restoration finishes; the list placeholder and storage row show loading status.
+`MiSPlayApp` shows the window, then calls `LibraryService.restoreLibrary()` once. Loading runs on a dedicated database worker. Import, favorite, playlist/view and preference controls are gated until restoration finishes; the list placeholder and storage row show loading status.
 
 `LibraryRepository.defaultDatabasePath()` uses `%LOCALAPPDATA%\MiSPlay\library.db`, falling back to `.misplay/library.db` under Java's `user.home` when `LOCALAPPDATA` is missing or blank. Its constructor normalizes the path without touching the disk. Opening a connection creates the parent directory and database when needed. No separate SQLite server or `module-info.java` is required; Maven supplies `sqlite-jdbc` 3.53.4.0 and runtime `slf4j-nop` 1.7.36. The launcher's native-access option includes `ALL-UNNAMED` for the JDBC dependency.
 
-Schema version 4 is recorded with `PRAGMA user_version`. Startup upgrades schemas 0–3 transactionally: schemas 0/1 receive cached-tag columns, earlier schemas gain a preferences table when needed, and all gain playlist/membership tables. Saved paths, IDs, library order, valid caches and existing playback settings are not replaced. The track table remains:
+Schema version 5 is recorded with `PRAGMA user_version`. Startup upgrades schemas 0â€“4 transactionally: schemas 0/1 receive cached-tag columns, earlier schemas gain preferences and playlist/membership tables when needed, and all gain a favorite-membership table. Saved paths, IDs, library order, valid caches, manual playlists and existing playback settings are not replaced. The track table remains:
 
 ```sql
 CREATE TABLE IF NOT EXISTS library_tracks (
@@ -49,11 +49,11 @@ CREATE TABLE IF NOT EXISTS library_tracks (
 );
 ```
 
-Metadata-cache format version 1 is separate from database schema version 4. Bump the cache-format constant when tag interpretation or fallback rules change, so older results become misses. Missing fields, negative sizes and unsupported cache-format versions are treated as uncached metadata rather than rejecting the saved paths.
+Metadata-cache format version 1 is separate from database schema version 5. Bump the cache-format constant when tag interpretation or fallback rules change, so older results become misses. Missing fields, negative sizes and unsupported cache-format versions are treated as uncached metadata rather than rejecting the saved paths.
 
-`loadState()` reads paths/caches with `ORDER BY id`, the preferences row, and playlists/memberships by their saved positions in one read transaction. It validates absolute paths and returns normalized files without checking existence or starting playback. On the JavaFX thread, `LibraryService` assigns preferences, registers Tracks, restores playlist snapshots and schedules background cache checks without reinserting paths. All restored state is assigned before `restoringLibrary` becomes false. The app applies preferences to audio/queue/controls under a guard suppressing save requests. The original insertion order becomes the library order; filesystem traversal order is not guaranteed for a newly imported folder. The initial view is All songs with an empty playback queue.
+`loadState()` reads paths/caches with `ORDER BY id`, the preferences row, playlists/memberships by saved positions and favorite membership in one read transaction. It validates absolute paths and returns normalized files without checking existence or starting playback. On the JavaFX thread, `LibraryService` assigns preferences, registers Tracks, restores playlist/favorite snapshots and schedules background cache checks without reinserting paths. All restored state is assigned before `restoringLibrary` becomes false. The app applies preferences to audio/queue/controls under a guard suppressing save requests. The original insertion order becomes the library order; filesystem traversal order is not guaranteed for a newly imported folder. The initial view is All songs with an empty playback queue; restoring stars schedules no favorite write.
 
-An initial restore/migration failure disables saving for that launch, displays a status message and enables temporary imports/playback/playlists/settings after loading finishes. An unreadable/corrupt database or schema version above 4 is not silently reset or replaced. Invalid playlist data, including orphan membership, also fails restoration instead of discarding it. Fix the storage problem and restart to retry restoration. Missing media paths retain library/playlist membership even if metadata or audio loading fails. Keep a database backup before upgrading; earlier application code cannot open schema 4.
+An initial restore/migration failure disables saving for that launch, displays a status message and enables temporary imports/playback/favorites/playlists/settings after loading finishes. An unreadable/corrupt database or schema version above 5 is not silently reset or replaced. Invalid playlist/favorite references, including orphan membership, also fail restoration instead of discarding data. Fix the storage problem and restart to retry restoration. Missing media paths retain library/playlist/favorite membership even if metadata or audio loading fails. Keep a database backup before upgrading; earlier application code cannot open schema 5.
 
 ### Saving imported paths
 
@@ -61,11 +61,11 @@ After restoration, `addFiles` registers new normalized paths on the JavaFX threa
 
 One database task runs at a time. An insertion-ordered pending set coalesces new paths while a batch is active. A pending metadata map retains the latest result or clear request for each path. Tag results can coalesce until 32 pending changes or the end of the metadata queue; imports, save completion and normal close can also flush smaller batches.
 
-The repository opens/closes a connection per operation, uses a three-second SQLite busy timeout and enables foreign keys. `saveChanges` inserts paths with prepared parameters and `ON CONFLICT(path) DO NOTHING`, updates cached columns, optionally upserts preferences and optionally replaces the playlist snapshot in one transaction. Null preferences or playlists leave that component unchanged; an empty playlist snapshot deletes all playlists. Paths are inserted before membership references are saved. Cache/settings/playlist updates never reorder library paths. SQL failures, cache updates for unknown paths or playlist references to unknown paths roll back the whole batch. Library membership remains append-only; there is no removal or full-library snapshot replacement.
+The repository opens/closes a connection per operation, uses a three-second SQLite busy timeout and enables foreign keys. `saveChanges` inserts paths with prepared parameters and `ON CONFLICT(path) DO NOTHING`, updates cached columns, optionally upserts preferences and optionally replaces playlist/favorite snapshots in one transaction. A null optional component leaves it unchanged; an empty playlist list or favorite set clears that component. Paths are inserted before membership references are saved. Cache/settings/playlist/favorite updates never reorder library paths. SQL failures, cache updates for unknown paths or membership references to unknown paths roll back the whole batch. Library membership remains append-only; there is no removal or full-library snapshot replacement.
 
-The storage row shows restoration/saving activity. A failed write restores paths, metadata changes and settings/playlists to pending state, sets the save-failed property and pauses automatic writes. New imports/results/settings/playlist edits can still join pending work. Newer waiting metadata and preference/playlist snapshots win over older failed snapshots, including an empty playlist list. Retry save clears the failure state and attempts pending changes again. Import, search, playlist editing and playback continue while saves run.
+The storage row shows restoration/saving activity. A failed write restores paths, metadata changes and settings/playlist/favorite snapshots to pending state, sets the save-failed property and pauses automatic writes. New imports/results/settings/playlist/favorite edits can still join pending work. Newer waiting metadata and snapshots win over older failed snapshots, including an empty playlist list or favorite set. Retry save clears the failure state and attempts pending changes again. Import, search, favorite/playlist editing and playback continue while saves run.
 
-Paths, library/playlist order, playlist IDs/names/membership, valid title/artist/album caches and playback preferences persist. Loading status, artwork, selected view and active queue/song/position/order are rebuilt or reset each launch. Normal close attempts to finish accepted writes; forced termination or an unresolved storage error can leave paths/cache/settings/playlist updates unsaved.
+Paths, library/playlist order, favorite membership, playlist IDs/names/membership, valid title/artist/album caches and playback preferences persist. Loading status, artwork, selected view and active queue/song/position/order are rebuilt or reset each launch. Normal close attempts to finish accepted writes; forced termination or an unresolved storage error can leave paths/cache/settings/playlist/favorite updates unsaved.
 
 ### Opening a track
 
@@ -89,7 +89,7 @@ Synchronous construction failures are caught by `loadAndPlay`. Later media/playe
 
 - `AudioService` holds at most one active player and disposes of the previous player before replacing it.
 - Disposal clears the service's player reference before releasing audio resources.
-- `LibraryService` owns the current launch's Track objects, path lookup, immutable playlist snapshots, metadata/scanning/database workers and active/pending save snapshots, including preferences and playlists.
+- `LibraryService` owns the current launch's Track objects, path lookup, immutable playlist/favorite snapshots, metadata/scanning/database workers and active/pending save snapshots, including preferences, playlists and favorites.
 - `LibraryRepository` owns blocking SQL operations; each operation closes its statements and connection and runs on the database worker.
 - `ArtworkService` owns the artwork worker and thumbnail cache; Track metadata remains strings only.
 - `MiSPlayApp` owns the preference save delay and restoration/shutdown guards. Its stop method captures the latest settings before closing the library service.
@@ -135,9 +135,9 @@ Only volume, repeat mode and the shuffle switch are saved. Queue membership, sel
 
 `PlaybackQueue` is a plain Java class containing the captured original order, active playback order, current position, repeat mode and shuffle flag. Its entries reference files rather than loaded audio.
 
-Activating a row passes its Track to `startQueue`. That action converts the current visible filtered/sorted entries into a `List<File>` and passes it, together with the selected file, to `PlaybackQueue.start`. All songs uses library insertion order; a playlist uses its independent manual order before shuffle rules apply.
+Activating a row passes its Track to `startQueue`. That action converts the current visible filtered/sorted entries into a `List<File>` and passes it, together with the selected file, to `PlaybackQueue.start`. All songs and Favorites use library insertion order; a manual playlist uses its independent order before shuffle rules apply.
 
-The queue captures its file order using `List.copyOf`. Later metadata changes, searches, imports, view changes and playlist edits/deletion leave it intact. A song removed from a playlist can still play from that previously captured queue. Activating another row creates a new queue. Open MP3 creates a single-song queue.
+The queue captures its file order using `List.copyOf`. Later metadata changes, searches, imports, view changes, favorite edits and playlist edits/deletion leave it intact. A song removed from Favorites or a playlist can still play from that previously captured queue. Activating another row creates a new queue. Open MP3 creates a single-song queue.
 
 The shared `playFile` action updates metadata/artwork, audio playback, visible selection and navigation buttons. Previous/Next use the active queue without rebuilding it and start the selected song even if playback was paused. Volume carries over.
 
@@ -171,7 +171,7 @@ Disabling shuffle restores `originalTracks` and finds the current song's positio
 
 Toggling shuffle updates queue state and controls without reloading audio, preserving playback position and paused state.
 
-Searches, imports, view changes and playlist edits do not change the active queue. Starting another queue preserves the shuffle switch; later launches restore that switch without restoring the earlier queue/order. Turn Shuffle OFF when checking a playlist's manual playback order.
+Searches, imports, view changes, favorite edits and playlist edits do not change the active queue. Starting another queue preserves the shuffle switch; later launches restore that switch without restoring the earlier queue/order. Turn Shuffle OFF when checking library or manual-playlist playback order.
 
 ### Seeking
 
@@ -201,7 +201,7 @@ The completion callback remains registered when individual players are replaced.
 
 The source list uses an extractor observing each track's `metadataProperty()`, so metadata changes produce list-update events.
 
-A `ListView<Track>` displays filtered/sorted entries through reusable cells with a fixed height of 32 pixels. Multiple selection supports Ctrl/Shift membership actions; playback activation uses the chosen row. Each populated cell binds its text to metadata and displays title — artist. Pending tracks use filename and Unknown artist fallbacks until their background read finishes; small files may update too quickly to observe the fallback.
+A `ListView<Track>` displays filtered/sorted entries through reusable cells with a fixed height of 32 pixels. Multiple selection supports Ctrl/Shift membership actions; playback activation uses the chosen row. Each populated cell binds its text to metadata and displays title â€” artist. Pending tracks use filename and Unknown artist fallbacks until their background read finishes; small files may update too quickly to observe the fallback.
 
 When a cell is reused, `updateItem` unbinds its text, disposes of its previous binding and clears empty-cell content before binding to another Track. Cell rendering uses in-memory values and does not read tags or decode artwork.
 
@@ -221,11 +221,11 @@ Changes to search results do not modify the captured playback queue or interrupt
 
 ### Manual playlists
 
-`Playlist` is an immutable record containing a stable string ID, trimmed name and copied normalized absolute file paths in manual order. Its constructor rejects blank IDs, blank/overlong names and duplicate normalized members. The app permits 1–100 name characters; service create/rename checks also reject case-insensitive duplicate names and reserve All songs. New saved IDs come from `UUID.randomUUID()`.
+`Playlist` is an immutable record containing a stable string ID, trimmed name and copied normalized absolute file paths in manual order. Its constructor rejects blank IDs, blank/overlong names and duplicate normalized members. The app permits 1â€“100 name characters; service create/rename checks also reject case-insensitive duplicate names and reserve All songs. New saved IDs come from `UUID.randomUUID()`.
 
 `LibraryService.getPlaylists()` exposes an unmodifiable observable list of immutable snapshots. `createPlaylist`, `renamePlaylist`, `deletePlaylist`, `addToPlaylist`, `removeFromPlaylist` and `movePlaylistTrack` own edits on the JavaFX thread and are gated during restoration. Added/removed Track arguments must be the service's canonical library objects. Adds use a `LinkedHashSet` to append once in supplied order; the UI supplies visible selection order. A single move swaps adjacent entries, with boundary moves and unchanged renames/duplicate adds producing no save.
 
-The View dropdown includes a synthetic All songs choice plus saved snapshots. Playlist-list changes rebuild its choices while preserving the selected ID, including through renames and membership edits. Deleting the selected playlist falls back to All songs. The existing library `FilteredList` limits membership/search and a `SortedList` applies saved playlist positions; All songs retains source insertion order. Rows therefore keep the same Track identities and live metadata updates. Selection is retained where still visible when the view is reapplied.
+The View dropdown includes synthetic All songs/Favorites choices plus saved manual snapshots displayed as Playlist: name. Playlist-list changes rebuild its choices while preserving the selected ID, including through renames and membership edits. Deleting the selected playlist falls back to All songs. The existing library `FilteredList` limits membership/search and a `SortedList` applies saved playlist positions; built-in views retain source insertion order. Rows therefore keep the same Track identities and live metadata updates. Selection is retained where still visible when the view is reapplied.
 
 New/rename dialogs remain open for invalid names. Add to playlist opens a destination chooser and skips existing memberships. Remove from playlist edits only that playlist; Delete playlist asks for confirmation. These operations keep library rows and media files intact, including shared membership in another playlist. Move buttons require one selected song and a blank search, so a move cannot be obscured by hidden results. File/folder imports still populate All songs; they do not automatically join the selected playlist. The dropdown truncates long names while keeping header action labels readable.
 
@@ -253,6 +253,30 @@ Each accepted playlist save replaces the complete playlist/membership snapshot t
 
 No playlist import/export, drag ordering, duplicate entries within one playlist or library-removal feature is included. Full-snapshot performance for large playlists has not been profiled. The selected view and playback queue remain session-only; saved playlist order is restored without autoplay.
 
+### Favorites
+
+`LibraryService` stores favorite membership as an immutable `Set<File>` of normalized library paths inside a `ReadOnlyObjectWrapper`. `getFavoriteFiles()` returns the immutable snapshot, `favoriteFilesProperty()` exposes its read-only property and `isFavorite(Track)` supports UI queries. The Track and Playlist models remain unchanged.
+
+`setFavorites(List<Track>, boolean)` runs on the JavaFX thread after restoration. It builds a candidate set, validates every argument against the canonical library Track map, skips duplicate/unchanged members and publishes once when at least one membership changes. A later invalid Track cannot partially publish the candidate. Changed bulk edits produce one property notification and enqueue an immutable save snapshot when persistence is enabled; session-only edits remain possible after a failed initial restore.
+
+Favorite/Unfavorite buttons operate on a copied multi-selection. With a mixed selection, Favorite adds only unmarked songs and Unfavorite removes only marked ones. A redundant action or an empty selection disables the relevant button. Row text observes both Track metadata and the favorite property, prefixing marked titles with a star. Existing cell-binding cleanup releases both dependencies on reuse.
+
+The View dropdown has built-in All songs and Favorites choices plus manual Playlist: name labels. A manual playlist named Favorites keeps its own ID, members and order; it is not converted into built-in favorites on upgrade. Rename/delete/manual-move controls are disabled for built-in views. Add to playlist from Favorites chooses only real manual destinations.
+
+Favorites adds a membership predicate to the existing filtered library and uses source library order, with no manual comparator or extra Track objects. Membership changes reapply the view when Favorites is selected; metadata updates continue through the library extractor. Search and favorite edits do not rebuild the captured playback queue. Removing a favorite keeps its file, library row and manual memberships; deleting a manual playlist preserves favorite membership.
+
+Schema 5 adds:
+
+```sql
+CREATE TABLE IF NOT EXISTS favorite_tracks (
+    track_id INTEGER PRIMARY KEY REFERENCES library_tracks(id)
+);
+```
+
+`loadState()` reads joined favorite paths and rejects missing database references while retaining unavailable media paths. The five-argument `saveChanges` accepts a favorite set alongside paths, metadata, preferences and playlists. Null preserves favorites; an empty set clears all favorite rows. Existing overloads pass null. Replacement deletes/reinserts only favorite rows in the same transaction, after any required library paths have been inserted; unknown paths and SQL failures roll everything back.
+
+Separate `activeFavoriteFiles` and `pendingFavoriteFiles` snapshots preserve the newest membership after failure and during the normal-close flush. Empty sets are real pending snapshots rather than absent changes. No polling loop or extra worker is introduced. Complete-set copy/saving cost for large favorite collections has not been profiled.
+
 ### Now-playing metadata
 
 `MetadataService` uses Jaudiotagger 3.0.1 to read an MP3's tags. It retrieves the first stored value for TITLE, ARTIST and ALBUM.
@@ -269,7 +293,7 @@ The shared `playFile` action calls `loadMetadata`, covering Open MP3, row activa
 
 Requesting playback asks `LibraryService` to prioritize a metadata check after the current check/read finishes, including for loaded or failed Tracks. This catches edits or repaired files. Completed results update their own Track objects; labels observe only the selected Track, so another result cannot replace the current song's details. Already displayed values can remain visible while revalidation is pending.
 
-Check/read failures replace stale text with filename/Unknown fallbacks, mark the Track FAILED, queue a stored-cache clear and show `Tags unavailable — showing filename.` for the selected track. Exceptions are logged independently of audio errors.
+Check/read failures replace stale text with filename/Unknown fallbacks, mark the Track FAILED, queue a stored-cache clear and show `Tags unavailable â€” showing filename.` for the selected track. Exceptions are logged independently of audio errors.
 
 Known issue: Yaezakura displays a shortened artist/details line even though Windows Properties lists artist and album information. The cause remains undiagnosed and investigation is deferred.
 
@@ -330,7 +354,7 @@ JavaFX controls, observable library/playlist collections, Track properties, play
 | Metadata | `LibraryService` | One `Task<MetadataReadResult>` validates attributes and reuses cached strings or calls `MetadataService`. | Update that Track/cache/status, queue fresh/cleared metadata for saving and start the next check. |
 | Folder scan | `LibraryService` | One `FolderScanTask` traverses folders and collects paths/counts. | Import a successful result or display cancellation/failure without adding partial results. |
 | Artwork | `ArtworkService` | One `Task<Image>` reads, resizes and copies an embedded cover. | Update the bounded cache and display only a result for the selected path. |
-| Database | `LibraryService` schedules `LibraryRepository` | One worker serializes migration, library/settings/playlist loading and transactional path/cache/preference/playlist writes. | Assign restored preferences/playlists before unlocking controls, register Tracks/cache candidates and update save state. |
+| Database | `LibraryService` schedules `LibraryRepository` | One worker serializes migration, complete startup loading and transactional path/cache/preference/playlist/favorite writes. | Assign restored preferences/playlists/favorites before unlocking controls, register Tracks/cache candidates and update save state. |
 | Preference delay | `MiSPlayApp` | None; a 250 ms `PauseTransition` runs on the JavaFX thread. | Capture the latest choices and enqueue an immutable save snapshot. |
 
 Metadata, folder scanning, artwork and database work use separate single-thread executors. The preference delay runs on the JavaFX thread and schedules SQL on the database worker. Background tasks return data without manipulating live controls or the observable library.
@@ -345,13 +369,13 @@ Artwork closing clears its current-task reference, waiting path and cache, reque
 
 Metadata, scanner and artwork workers are daemon threads. Cancellation is a request; closed/task-identity checks prevent late completions from updating the UI, including a database restore completing after close.
 
-The database worker is deliberately non-daemon. Closing does not cancel accepted database tasks. When persistence is enabled, a final save includes active/waiting paths, completed metadata changes and the newest pending preferences/playlists, falling back to active snapshots when no newer one exists. `shutdown()` lets the worker drain before JVM exit. Repeating path inserts, preference upserts or the same playlist snapshot leaves the same saved data. Failed-save changes are included; another failure is logged and is not claimed as saved. Unfinished/cancelled metadata reads can be rebuilt from saved paths next launch. Shutdown does not wait on the JavaFX thread. A lock can delay exit until its background timeout; forced termination bypasses normal draining.
+The database worker is deliberately non-daemon. Closing does not cancel accepted database tasks. When persistence is enabled, a final save includes active/waiting paths, completed metadata changes and the newest pending preferences/playlists/favorites, falling back to active snapshots when no newer one exists. Empty membership snapshots are retained. `shutdown()` lets the worker drain before JVM exit. Repeating path inserts, preference upserts or the same membership snapshots leaves the same saved data. Failed-save changes are included; another failure is logged and is not claimed as saved. Unfinished/cancelled metadata reads can be rebuilt from saved paths next launch. Shutdown does not wait on the JavaFX thread. A lock can delay exit until its background timeout; forced termination bypasses normal draining.
 
 ## Verification status
 
 The developer has reported working playback/library metadata, folder importing, embedded artwork and SQLite library-path checkpoints. Per-ID Windows results for the complete checklist below have not been recorded; the rows describe checks to run, not a blanket pass claim.
 
-The current application was reported working after the metadata-cache and playback-preferences handoffs. The developer has also accepted the manual-playlists checkpoint. Detailed per-scenario Windows results have not been recorded.
+The current application was reported working after the metadata-cache and playback-preferences handoffs. The developer has also accepted the manual-playlists and Favorites checkpoints. Detailed per-scenario Windows results have not been recorded.
 
 Development-time headless artwork checks used generated MP3 fixtures and covered JPEG/PNG resizing, Unicode filenames, cache reuse and eviction, missing/damaged covers, invalid-file recovery, rapid selection changes, obsolete-result handling and shutdown. A separate layout check used substitutes for the existing services. These checks do not establish a full build or audio regression result for the Windows project.
 
@@ -361,13 +385,17 @@ The metadata-cache checkpoint added 30 focused checks: migration/rollback and re
 
 The preferences checkpoint passed a separate set of 70 checks: 35 model/repository checks, 16 settings/cache-coordination checks and 19 application checks. They covered schema 0/1/2 upgrades, retained caches, every repeat/shuffle combination, zero/full/decimal volume, malformed values, singleton-row enforcement, atomic rollback, startup gating, coalesced snapshots, first explicit playback volume, retry, immediate-close capture and failed-startup session use.
 
-The playlist checkpoint passed 150 checks: 26 playlist model/repository, 23 playlist coordination, 29 playlist application and 2 layout checks, plus the existing 70 preferences/cache checks. Coverage included schemas 0–3 upgrades and retained library IDs/caches/settings; copied/normalized membership; Unicode/quoted names; duplicate/no-op edits; shared/empty playlists; atomic rollback; missing/repaired media; blocked-save responsiveness; newest-state retry including deletion of the final playlist; immediate close after import/create/add; and session-only edits after failed startup. Application checks exercised the actual dialogs/buttons, name correction, multi-selection, view/selection preservation, moves, scoped/live search, rename/delete cancellation, filtered queue capture/navigation wiring and restart without autoplay. Rendered layout checks covered a maximum-length name at the default and minimum window sizes; an identified header-label squeeze was fixed. The existing harness song-list selector was updated to distinguish the dropdown's internal list.
+The playlist checkpoint passed 150 checks: 26 playlist model/repository, 23 playlist coordination, 29 playlist application and 2 layout checks, plus the existing 70 preferences/cache checks. Coverage included schemas 0â€“3 upgrades and retained library IDs/caches/settings; copied/normalized membership; Unicode/quoted names; duplicate/no-op edits; shared/empty playlists; atomic rollback; missing/repaired media; blocked-save responsiveness; newest-state retry including deletion of the final playlist; immediate close after import/create/add; and session-only edits after failed startup. Application checks exercised the actual dialogs/buttons, name correction, multi-selection, view/selection preservation, moves, scoped/live search, rename/delete cancellation, filtered queue capture/navigation wiring and restart without autoplay. Rendered layout checks covered a maximum-length name at the default and minimum window sizes; an identified header-label squeeze was fixed. The existing harness song-list selector was updated to distinguish the dropdown's internal list.
+
+Favorites passed 88 focused checks: 32 repository/migration, 20 service and 36 application/layout. They covered schemas 0â€“4 upgrades and retained data, a legacy manual playlist named Favorites, immutable/validated bulk edits, no-op suppression, mixed selection, stars, main-library order, scoped/live search, queue capture/navigation wiring, existing playlist dialogs/controls, blocked/failed saves and latest-empty retry, immediate close, unavailable/repaired media, failed-startup protection and readable default/minimum layouts. The earlier 150-check playlist suite was not rerun and remains a separate recorded result.
 
 Those persistence checks ran with JDK 17 and JavaFX 21.0.1. Production repository, LibraryService and application code were exercised with API substitutes for unchanged model/audio/metadata/folder components where full source was unavailable. They are separate development harnesses, not a committed test suite or proof of the complete Java 25/JavaFX 25.0.2 Windows application. Local Windows playback verification remains necessary for later changes.
 
 For the preferences checks, all four changed/new classes and the existing ArtworkService compiled. The audio spy recorded requests and volume without decoding MP3s; the queue fixture did not verify the production shuffle algorithm. Those behaviors still depend on local checks with the complete project.
 
 For the playlist checks, the four changed/new classes compiled with the existing PlaybackPreferences and ArtworkService sources. Track, TrackMetadata, RepeatMode, audio, queue, metadata-reader and folder-task APIs were substitutes. The queue/audio fixtures verified capture/navigation requests and volume state without testing the actual shuffle implementation or MP3 playback. The harness files are not shipped as production sources.
+
+For Favorites, the three changed classes compiled with the unchanged Playlist, PlaybackPreferences and ArtworkService sources. Track, TrackMetadata, MetadataStatus, RepeatMode, audio, queue, metadata-reader and folder-task APIs were substitutes. Text fixtures exercised cache coordination; audio/queue spies verified requests without real MP3 decoding or the production shuffle algorithm. The same Java 17/JavaFX 21.0.1 harness limits apply, and the complete Java 25/JavaFX 25.0.2 Windows application still depends on local verification.
 
 No committed automated project test suite or memory/CPU profiling baseline has been recorded. The Yaezakura metadata display issue remains unresolved.
 
@@ -467,7 +495,7 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M84 | Start another queue containing previously cached tracks. | Cached metadata remains available across queue changes. |
 | M85 | Exercise navigation, library search, volume, seeking, repeat and shuffle. | Existing playback and library behavior continues working. |
 | M86 | Restart with an unchanged successfully cached file already saved, without reimporting or playing it. | Its path is restored; background validation reuses saved metadata without tag parsing. |
-| M87 | Import new unplayed tagged tracks after restoration finishes. | Pending rows can show filename — Unknown artist, then update automatically without playback; small files may load too quickly to see the fallback. |
+| M87 | Import new unplayed tagged tracks after restoration finishes. | Pending rows can show filename â€” Unknown artist, then update automatically without playback; small files may load too quickly to see the fallback. |
 | M88 | Play a tagged song whose metadata is cached or still pending. | The row and now-playing labels use its metadata; unchanged cached values require an attribute check but no tag parse. |
 | M89 | Search a cached track by filename, title, artist and album. | Each field matches; case differences, surrounding whitespace and clearing the query work. |
 | M90 | Keep an artist query active and use Open MP3 on a new song by that artist. | Its row appears once metadata becomes available without editing the query. |
@@ -513,7 +541,7 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M130 | Launch a disposable harness with an unreadable/corrupt or newer-schema database, then import a file. | Loading fails visibly; temporary imports/playback remain available, saving stays disabled and the existing database is not reset. |
 | M131 | Close a disposable harness while initial restoration is still pending. | No late model/UI changes or errors occur; the accepted database task finishes and the process exits. |
 | M132 | Change volume/repeat/shuffle and play covered tracks, then close normally and relaunch. | Saved paths/order, validated text and playback preferences return; queue/song/position stay empty and artwork loads only for playback requests. |
-| M133 | Upgrade a disposable schema-1 database containing known paths/IDs. | Schema becomes 4; paths/IDs/order remain, cache columns fill from successful reads, playlists start empty and preferences use defaults until edited. |
+| M133 | Upgrade a disposable schema-1 database containing known paths/IDs. | Schema becomes 5; paths/IDs/order remain, cache columns fill from successful reads, favorites/playlists start empty and preferences use defaults until edited. |
 | M134 | Fill caches, close normally, relaunch unchanged files and inspect parser calls with a debugger/harness. | Background attribute validation restores text metadata/search without calling the tag parser for those files. |
 | M135 | Close, change tags on a disposable saved MP3, then relaunch. | Changed size or modification time triggers a fresh read and updates the row/search before playback is required. |
 | M136 | In a disposable fixture harness, test same-size/time-only edits and size-only edits with unchanged time. | Either changed attribute invalidates cached text; available submillisecond timestamp differences are retained. |
@@ -525,7 +553,7 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M142 | With active/waiting metadata updates, close normally using a writable disposable database. | Accepted writes drain and the final flush stores the newest completed result; unfinished reads can be rebuilt next launch. |
 | M143 | In a disposable database, use an unsupported metadata-cache version or incomplete cache fields, then relaunch. | Paths still restore; invalid cached text becomes a miss and successful fresh tags replace it. |
 | M144 | Import an untagged but readable MP3, let its fallbacks save, then relaunch unchanged. | Filename/Unknown fallbacks are reused after validation without another tag parse. |
-| M145 | Upgrade a disposable schema-2 library with valid cached tags. | Schema becomes 4; paths, IDs, order and caches remain, playlists start empty and the preferences table initially uses unsaved defaults. |
+| M145 | Upgrade a disposable schema-2 library with valid cached tags. | Schema becomes 5; paths, IDs, order and caches remain, favorites/playlists start empty and the preferences table initially uses unsaved defaults. |
 | M146 | Set volume to 23%, Repeat ALL and Shuffle ON; close normally and reopen. | All choices return before controls become available; playback stays stopped. |
 | M147 | Save 0% and then 100% volume across separate restarts. | Both boundary values survive; 0% is not replaced by 50%, and the first explicit song uses restored volume. |
 | M148 | Save each repeat mode and both shuffle-switch values across launches. | Each choice returns; no particular old shuffled order is promised. |
@@ -537,7 +565,7 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M154 | Start with an unreadable/future-schema disposable database, then change controls and close. | Temporary session choices work after loading fails; the original database/settings are not overwritten. |
 | M155 | In a disposable harness, fail a preference save batched with path/tag changes. | The whole batch rolls back; no partial path/cache/settings changes commit. |
 | M156 | Restore saved preferences, then select a library song for playback. | No prior queue/song/position is resumed automatically; the fresh queue uses the restored modes and volume. |
-| M157 | Upgrade a disposable schema-3 library with cached tags and saved playback preferences. | Schema becomes 4 with empty playlist tables; paths, row IDs, insertion order, valid caches and playback settings remain. |
+| M157 | Upgrade a disposable schema-3 library with cached tags and saved playback preferences. | Schema becomes 5 with empty favorite/playlist tables; paths, row IDs, insertion order, valid caches and playback settings remain. |
 | M158 | Create an empty playlist, then cancel a separate New playlist dialog. | The created playlist is selected and saved even without members; cancelling creates nothing. |
 | M159 | Try blank/overlong names, a differently cased existing name and All songs in create/rename dialogs, then correct the input. | Invalid input keeps the dialog open without an edit; a valid trimmed unique name is accepted. |
 | M160 | In All songs, select separate songs with Ctrl and a range with Shift, then add them to a chosen playlist. | Members append once in visible selection order; the current library view and visible selection remain available. |
@@ -561,6 +589,26 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M178 | In a disposable harness, fail a playlist write batched with paths, cache and preferences. | The complete batch rolls back, including playlist replacement; retry can save a newer consistent snapshot. |
 | M179 | In a disposable harness, provide incompatible playlist tables, invalid orphan membership or a future schema version. | Loading reports failure without resetting data; failed migration rolls back its schema changes. |
 | M180 | Delay startup in a disposable harness and close before restoration finishes. | Playlist controls remain gated while loading; close prevents late playlist/model updates and temporary defaults do not overwrite saved state. |
+| M181 | Upgrade a disposable schema-4 library with manual playlists, caches and saved preferences. | Schema becomes 5 with empty built-in Favorites; existing IDs/order/cache/settings remain, including a manual playlist named Favorites. |
+| M182 | Delay initial loading in a disposable harness and inspect favorite controls and writes. | Favorite/Unfavorite and view controls remain gated; restoring membership/stars starts no audio and writes no default favorite snapshot. |
+| M183 | Select an unmarked song in All songs and click Favorite, then view a manual playlist containing it. | Both views show its star through the same Track; Favorites contains the song once. |
+| M184 | Select marked and unmarked songs together, then apply each favorite action. | Both actions are available for mixed selection, only relevant memberships change, and redundant/empty-selection actions disable without duplicate writes. |
+| M185 | Favorite several songs in a different order from the library, then open Favorites. | Rows follow main-library insertion order; manual reorder controls are disabled. |
+| M186 | Search Favorites, then refresh a changed marked song's metadata. | Only marked matching songs appear; metadata refresh updates the same Track's starred row and search results. |
+| M187 | Favorite/unfavorite songs from a manual playlist, then remove a manual membership or delete that playlist. | Favorite state stays independent; library rows, other memberships and actual music files remain. |
+| M188 | With Shuffle OFF, activate Favorites and then a filtered Favorites result. | Each explicit activation captures that view's visible files/order; normal repeat/shuffle choices still apply. |
+| M189 | Start a Favorites queue, then unfavorite queued songs, search and change views. | The original queue and current playback remain intact, including songs no longer marked. |
+| M190 | Remove the final favorite, close normally and reopen. | The empty-state instruction appears and empty membership stays saved; library songs/files and playlists remain. |
+| M191 | Select Favorites rows and use Add to playlist. | The chooser offers real manual playlists, appends selected songs once and retains favorite state/current view. |
+| M192 | Compare built-in Favorites with a manual playlist named Favorites. | Labels distinguish Favorites from Playlist: Favorites; only the manual playlist has rename/delete/move controls and its own order. |
+| M193 | Save favorites and preferences, close normally and reopen. | Membership/stars and preferences return; the initial view is All songs with no restored queue or automatic playback. |
+| M194 | Import files, edit a playlist, favorite songs, change preferences and immediately close normally. | Paths save before their references and the final favorite/playlist/preference snapshots survive when storage is writable. |
+| M195 | In a disposable harness, fail/block an older favorite save, make newer edits or remove all, then clear the fault and press Retry save. | Controls remain usable; the latest snapshot wins, including empty membership, and successful retry clears failure status. |
+| M196 | In a disposable harness, fail startup loading, then import and favorite a session song. | Temporary choices work after loading unlocks; closing leaves the unreadable/future saved database untouched. |
+| M197 | Make a disposable marked song unavailable, then restore it and explicitly reimport/request it. | Favorite membership remains while metadata fails and recovers; the repaired song needs no new favorite entry. |
+| M198 | In a disposable harness, fail a favorite insert batched with path/cache/preferences/playlist changes. | The complete transaction rolls back, including snapshot deletion; invalid references do not cause partial state. |
+| M199 | Inspect default/minimum window sizes with a maximum-length manual-playlist label and favorite controls visible. | Star rows and all main action labels remain readable; only the dropdown name truncates as needed. |
+| M200 | Close a disposable harness during delayed favorite restoration. | No late favorite/model publication occurs and temporary empty defaults do not overwrite saved membership. |
 
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
@@ -593,14 +641,14 @@ type: short description of the resulting behavior
 | `test` | Add meaningful verification |
 
 
-The manual-playlists checkpoint can use `feat: add persistent manual playlists` when its three changed Java files, new `Playlist` record and documentation are committed together. If the feature code is already committed and only documentation remains, use `docs: document manual playlists`.
+The Favorites checkpoint can use `feat: add persistent favorites` when its three changed Java files and documentation are committed together. If the feature code is already committed and only documentation remains, use `docs: document favorites`.
 
 For later checkpoints, update `CHANGELOG.md` when functionality changes. Update the README for changed features, prerequisites or run instructions. Update this guide when responsibilities, workflows or verification change. Do not invent documentation changes just to fill a checklist.
 
 ## Upcoming implementation notes
 
-- Add Favorites with saved membership using the existing Track objects, database worker and captured-queue behavior.
-- Keep manual playlist edits independent from the active playback queue; profile full-snapshot saving before optimizing large playlists.
+- Proposed next: sidecar LRC display, with embedded-lyrics support in a later checkpoint.
+- Keep favorite/playlist edits independent from the active playback queue; profile full-snapshot saving before optimizing large collections.
 - Keep database work and expensive file/image operations off the JavaFX Application Thread, applying observable-model changes on that thread.
 - Preserve stable Track identity and captured playback-queue behavior while adding persistence.
 - Extend refresh/invalidation to artwork and path repair; text metadata already validates size/time on startup, playback requests and reimport.

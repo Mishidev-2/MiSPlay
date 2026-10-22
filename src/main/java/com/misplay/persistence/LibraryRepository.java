@@ -21,10 +21,11 @@ import java.util.LinkedHashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /** Blocking database operations. Call these methods on the database worker. */
 public final class LibraryRepository {
-    private static final int SCHEMA_VERSION = 4;
+    private static final int SCHEMA_VERSION = 5;
     // Bump this when tag interpretation or fallback rules change.
     private static final int METADATA_CACHE_VERSION = 1;
     private final Path databasePath;
@@ -52,15 +53,16 @@ public final class LibraryRepository {
         }
     }
 
-    /** Paths, caches, preferences and playlists read before startup is unlocked. */
+    /** All saved library state read before startup is unlocked. */
     public record LibraryState(
             List<SavedTrack> tracks, PlaybackPreferences preferences,
-            List<Playlist> playlists
+            List<Playlist> playlists, Set<File> favoriteFiles
     ) {
         public LibraryState {
             tracks = List.copyOf(tracks);
             Objects.requireNonNull(preferences);
             playlists = List.copyOf(playlists);
+            favoriteFiles = Set.copyOf(favoriteFiles);
         }
     }
 
@@ -100,8 +102,9 @@ public final class LibraryRepository {
                 List<SavedTrack> entries = readTracks(connection);
                 PlaybackPreferences preferences = readPreferences(connection);
                 List<Playlist> playlists = readPlaylists(connection);
+                Set<File> favorites = readFavorites(connection);
                 connection.commit();
-                return new LibraryState(entries, preferences, playlists);
+                return new LibraryState(entries, preferences, playlists, favorites);
             } catch (SQLException | RuntimeException error) {
                 rollback(connection, error);
                 throw error;
@@ -203,8 +206,17 @@ public final class LibraryRepository {
             List<File> files, List<SavedTrack> metadataChanges,
             PlaybackPreferences preferences, List<Playlist> playlists
     ) throws IOException, SQLException {
+        saveChanges(files, metadataChanges, preferences, playlists, null);
+    }
+
+    /** Null favorites preserves them; an empty snapshot removes all favorites. */
+    public void saveChanges(
+            List<File> files, List<SavedTrack> metadataChanges,
+            PlaybackPreferences preferences, List<Playlist> playlists,
+            Set<File> favorites
+    ) throws IOException, SQLException {
         if (files.isEmpty() && metadataChanges.isEmpty()
-                && preferences == null && playlists == null) {
+                && preferences == null && playlists == null && favorites == null) {
             return;
         }
 
@@ -292,10 +304,65 @@ public final class LibraryRepository {
                     savePlaylists(connection, playlists);
                 }
 
+                if (favorites != null) {
+                    saveFavorites(connection, favorites);
+                }
+
                 connection.commit();
             } catch (SQLException | RuntimeException error) {
                 rollback(connection, error);
                 throw error;
+            }
+        }
+    }
+
+    private static Set<File> readFavorites(Connection connection) throws SQLException {
+        Set<File> favorites = new HashSet<>();
+
+        try (Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery(
+                     """
+                     SELECT track.path
+                     FROM favorite_tracks favorite
+                     LEFT JOIN library_tracks track ON track.id = favorite.track_id
+                     """
+             )) {
+            while (rows.next()) {
+                String storedPath = rows.getString("path");
+
+                if (storedPath == null) {
+                    throw new SQLException("A favorite refers to a missing library row.");
+                }
+
+                Path path = Path.of(storedPath);
+
+                if (!path.isAbsolute()) {
+                    throw new SQLException("A favorite contains a relative path.");
+                }
+
+                favorites.add(path.normalize().toFile());
+            }
+        }
+
+        return Set.copyOf(favorites);
+    }
+
+    private static void saveFavorites(Connection connection, Set<File> favorites)
+            throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("DELETE FROM favorite_tracks");
+        }
+
+        try (PreparedStatement insert = connection.prepareStatement(
+                "INSERT INTO favorite_tracks(track_id) "
+                        + "SELECT id FROM library_tracks WHERE path = ?"
+        )) {
+            for (File file : favorites) {
+                insert.setString(1, file.toPath().toAbsolutePath().normalize().toString());
+
+                if (insert.executeUpdate() != 1) {
+                    throw new SQLException("A favorite is not in the saved library.");
+                }
             }
         }
     }
@@ -558,6 +625,18 @@ public final class LibraryRepository {
                         "SELECT playlist_id, track_id, position FROM playlist_entries LIMIT 0"
                 )) {
                     // Existing incompatible playlist tables must also fail migration.
+                }
+
+                statement.execute("""
+                        CREATE TABLE IF NOT EXISTS favorite_tracks (
+                            track_id INTEGER PRIMARY KEY REFERENCES library_tracks(id)
+                        )
+                        """);
+
+                try (ResultSet ignored = statement.executeQuery(
+                        "SELECT track_id FROM favorite_tracks LIMIT 0"
+                )) {
+                    // An incompatible existing favorites table must fail migration.
                 }
 
                 statement.execute("PRAGMA user_version = " + SCHEMA_VERSION);

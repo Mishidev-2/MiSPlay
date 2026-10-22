@@ -67,6 +67,7 @@ import javafx.stage.Stage;
 
 import javafx.beans.binding.Bindings;
 import javafx.util.Duration;
+import javafx.util.StringConverter;
 
 
 
@@ -322,8 +323,27 @@ public class MiSPlayApp extends Application {
         searchField.setPromptText("Search filename, title, artist or album...");
 
         Playlist allSongs = new Playlist("all-songs", "All songs", List.of());
-        var playlistChoices = FXCollections.observableArrayList(allSongs);
+        Playlist favoritesView = new Playlist("favorites", "Favorites", List.of());
+        var playlistChoices = FXCollections.observableArrayList(allSongs, favoritesView);
         ComboBox<Playlist> playlistChooser = new ComboBox<>(playlistChoices);
+        playlistChooser.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(Playlist playlist) {
+                if (playlist == null) {
+                    return "";
+                }
+
+                return playlist.id().equals(allSongs.id())
+                        || playlist.id().equals(favoritesView.id())
+                        ? playlist.name() : "Playlist: " + playlist.name();
+            }
+
+            @Override
+            public Playlist fromString(String text) {
+                return playlistChoices.stream().filter(choice -> toString(choice).equals(text))
+                        .findFirst().orElse(null);
+            }
+        });
         playlistChooser.setId("playlist-view");
         playlistChooser.setValue(allSongs);
         playlistChooser.setPrefWidth(260);
@@ -350,15 +370,24 @@ public class MiSPlayApp extends Application {
                         || playlistChooser.getValue().id().equals(allSongs.id()),
                 playlistChooser.valueProperty()
         );
+        BooleanBinding favoritesSelected = Bindings.createBooleanBinding(
+                () -> playlistChooser.getValue() != null
+                        && playlistChooser.getValue().id().equals(favoritesView.id()),
+                playlistChooser.valueProperty()
+        );
+        BooleanBinding manualPlaylistSelected = allSongsSelected.or(favoritesSelected).not();
 
         Runnable applyLibraryView = () -> {
             List<Track> selection = List.copyOf(songList.getSelectionModel().getSelectedItems());
             Track selected = songList.getSelectionModel().getSelectedItem();
             Playlist playlist = playlistChooser.getValue();
             boolean showAll = allSongsSelected.get();
+            boolean showFavorites = favoritesSelected.get();
+            boolean showPlaylist = manualPlaylistSelected.get();
+            var favorites = libraryService.getFavoriteFiles();
             Map<File, Integer> positions = new HashMap<>();
 
-            if (!showAll) {
+            if (showPlaylist) {
                 for (int index = 0; index < playlist.files().size(); index++) {
                     positions.put(playlist.files().get(index), index);
                 }
@@ -366,10 +395,11 @@ public class MiSPlayApp extends Application {
 
             String query = searchField.getText().strip().toLowerCase(Locale.ROOT);
             filteredTracks.setPredicate(track ->
-                    (showAll || positions.containsKey(track.getFile()))
+                    (showAll || (showFavorites && favorites.contains(track.getFile()))
+                            || (showPlaylist && positions.containsKey(track.getFile())))
                             && track.matchesSearch(query)
             );
-            visibleTracks.setComparator(showAll ? null : java.util.Comparator.comparingInt(
+            visibleTracks.setComparator(!showPlaylist ? null : java.util.Comparator.comparingInt(
                     track -> positions.getOrDefault(track.getFile(), Integer.MAX_VALUE)
             ));
 
@@ -398,7 +428,7 @@ public class MiSPlayApp extends Application {
             refreshingPlaylistChoices[0] = true;
 
             try {
-                playlistChoices.setAll(allSongs);
+                playlistChoices.setAll(allSongs, favoritesView);
                 playlistChoices.addAll(libraryService.getPlaylists());
                 playlistChooser.setValue(playlistChoices.stream()
                         .filter(playlist -> selected != null
@@ -409,6 +439,11 @@ public class MiSPlayApp extends Application {
             }
 
             applyLibraryView.run();
+        });
+        libraryService.favoriteFilesProperty().addListener((observable, previous, current) -> {
+            if (favoritesSelected.get()) {
+                applyLibraryView.run();
+            }
         });
 
         Consumer<File> playFile = file -> {
@@ -503,17 +538,29 @@ public class MiSPlayApp extends Application {
 
         emptyLabel.textProperty().bind(
                 Bindings.createStringBinding(
-                        () -> libraryService.restoringLibraryProperty().get()
-                                ? "Loading saved library..."
-                                : !allSongsSelected.get()
-                                        && playlistChooser.getValue().files().isEmpty()
-                                        ? "This playlist is empty. Select All songs to add library songs."
-                                : allSongsSelected.get() && libraryService.getTracks().isEmpty()
-                                        ? "Use Add MP3s or Add Folder to build your song list."
-                                        : "No songs match your search.",
+                        () -> {
+                            if (libraryService.restoringLibraryProperty().get()) {
+                                return "Loading saved library...";
+                            }
+
+                            if (favoritesSelected.get() && libraryService.getFavoriteFiles().isEmpty()) {
+                                return "No favorites yet. Select songs in All songs and click Favorite.";
+                            }
+
+                            if (manualPlaylistSelected.get() && playlistChooser.getValue().files().isEmpty()) {
+                                return "This playlist is empty. Select All songs to add library songs.";
+                            }
+
+                            return allSongsSelected.get() && libraryService.getTracks().isEmpty()
+                                    ? "Use Add MP3s or Add Folder to build your song list."
+                                    : "No songs match your search.";
+                        },
                         libraryService.getTracks(),
                         playlistChooser.valueProperty(),
                         allSongsSelected,
+                        favoritesSelected,
+                        manualPlaylistSelected,
+                        libraryService.favoriteFilesProperty(),
                         libraryService.restoringLibraryProperty()
                 )
         );
@@ -549,11 +596,12 @@ public class MiSPlayApp extends Application {
                             () -> {
                                 TrackMetadata metadata = track.getMetadata();
 
-                                return metadata.title()
+                                return (libraryService.isFavorite(track) ? "★ " : "")
+                                        + metadata.title()
                                         + " — "
                                         + metadata.artist();
                             },
-                            track.metadataProperty()
+                            track.metadataProperty(), libraryService.favoriteFilesProperty()
                     );
 
                     textProperty().bind(rowText);
@@ -596,7 +644,7 @@ public class MiSPlayApp extends Application {
         Button deletePlaylistButton = new Button("Delete playlist");
         newPlaylistButton.disableProperty().bind(libraryService.restoringLibraryProperty());
         renamePlaylistButton.disableProperty().bind(
-                libraryService.restoringLibraryProperty().or(allSongsSelected)
+                libraryService.restoringLibraryProperty().or(manualPlaylistSelected.not())
         );
         deletePlaylistButton.disableProperty().bind(renamePlaylistButton.disableProperty());
 
@@ -640,13 +688,44 @@ public class MiSPlayApp extends Application {
         Button removeFromPlaylistButton = new Button("Remove from playlist");
         Button moveUpButton = new Button("Move up");
         Button moveDownButton = new Button("Move down");
+        Button favoriteButton = new Button("Favorite");
+        Button unfavoriteButton = new Button("Unfavorite");
+        favoriteButton.setTooltip(new Tooltip("Add the selected songs to Favorites."));
+        unfavoriteButton.setTooltip(new Tooltip("Remove the selected songs from Favorites."));
+        favoriteButton.disableProperty().bind(Bindings.createBooleanBinding(
+                () -> libraryService.restoringLibraryProperty().get()
+                        || songList.getSelectionModel().getSelectedItems().isEmpty()
+                        || songList.getSelectionModel().getSelectedItems().stream()
+                                .allMatch(libraryService::isFavorite),
+                libraryService.restoringLibraryProperty(), libraryService.favoriteFilesProperty(),
+                songList.getSelectionModel().getSelectedItems()
+        ));
+        unfavoriteButton.disableProperty().bind(Bindings.createBooleanBinding(
+                () -> libraryService.restoringLibraryProperty().get()
+                        || songList.getSelectionModel().getSelectedItems().stream()
+                                .noneMatch(libraryService::isFavorite),
+                libraryService.restoringLibraryProperty(), libraryService.favoriteFilesProperty(),
+                songList.getSelectionModel().getSelectedItems()
+        ));
+        favoriteButton.setOnAction(event -> {
+            int changed = libraryService.setFavorites(
+                    List.copyOf(songList.getSelectionModel().getSelectedItems()), true
+            );
+            playlistMessage.setText("Added " + changed + " song(s) to Favorites.");
+        });
+        unfavoriteButton.setOnAction(event -> {
+            int changed = libraryService.setFavorites(
+                    List.copyOf(songList.getSelectionModel().getSelectedItems()), false
+            );
+            playlistMessage.setText("Removed " + changed + " song(s) from Favorites.");
+        });
         addToPlaylistButton.disableProperty().bind(
                 libraryService.restoringLibraryProperty()
                         .or(Bindings.isEmpty(libraryService.getPlaylists()))
                         .or(Bindings.isEmpty(songList.getSelectionModel().getSelectedItems()))
         );
         removeFromPlaylistButton.disableProperty().bind(
-                libraryService.restoringLibraryProperty().or(allSongsSelected)
+                libraryService.restoringLibraryProperty().or(manualPlaylistSelected.not())
                         .or(Bindings.isEmpty(songList.getSelectionModel().getSelectedItems()))
         );
         moveUpButton.disableProperty().bind(Bindings.createBooleanBinding(
@@ -674,8 +753,8 @@ public class MiSPlayApp extends Application {
             List<Track> selected = songList.getSelectionModel().getSelectedIndices().stream()
                     .map(visibleTracks::get).toList();
             List<Playlist> destinations = List.copyOf(libraryService.getPlaylists());
-            Playlist initial = allSongsSelected.get()
-                    ? destinations.get(0) : playlistChooser.getValue();
+            Playlist initial = manualPlaylistSelected.get()
+                    ? playlistChooser.getValue() : destinations.get(0);
             ChoiceDialog<Playlist> dialog = new ChoiceDialog<>(initial, destinations);
             dialog.initOwner(stage);
             dialog.setTitle("Add to playlist");
@@ -697,7 +776,7 @@ public class MiSPlayApp extends Application {
         Consumer<Integer> moveSelected = direction -> {
             Track selected = songList.getSelectionModel().getSelectedItem();
 
-            if (selected != null && !allSongsSelected.get() && searchField.getText().isBlank()) {
+            if (selected != null && manualPlaylistSelected.get() && searchField.getText().isBlank()) {
                 libraryService.movePlaylistTrack(playlistChooser.getValue().id(), selected, direction);
                 songList.getSelectionModel().clearSelection();
                 songList.getSelectionModel().select(selected);
@@ -708,7 +787,8 @@ public class MiSPlayApp extends Application {
         moveDownButton.setOnAction(event -> moveSelected.accept(1));
 
         HBox playlistSongControls = new HBox(
-                8, addToPlaylistButton, removeFromPlaylistButton, moveUpButton, moveDownButton
+                8, addToPlaylistButton, removeFromPlaylistButton, moveUpButton, moveDownButton,
+                favoriteButton, unfavoriteButton
         );
         playlistSongControls.setAlignment(Pos.CENTER_LEFT);
 
