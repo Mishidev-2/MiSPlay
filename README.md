@@ -2,7 +2,7 @@
 
 A personal Windows 11 desktop music player built with Java 25 and JavaFX. The project is developed in small increments, with an emphasis on understandable Java OOP, responsive controls and measured resource use.
 
-**Status:** MP3 prototype with sidecar LRC lyrics, saved Favorites, manual playlists, library paths, metadata and playback preferences, background file-change checks, folder importing and embedded album artwork. The developer has accepted the Favorites checkpoint. The new LRC implementation passed development-harness checks; its complete Java 25/JavaFX 25 Windows build and real-audio checks are pending locally. Embedded lyrics and Windows packaging remain upcoming work.
+**Status:** MP3 prototype with sidecar and embedded lyrics, saved Favorites, manual playlists, library paths, metadata and playback preferences, background file-change checks, folder importing and embedded album artwork. The developer reports that sidecar LRC files work in their project. The new embedded-lyrics checkpoint passed development-harness checks; the complete target build, real-audio synchronization and compatibility with the developer’s Musicolet-edited files still need local verification. Windows packaging remains upcoming work.
 
 ## Current features
 
@@ -59,7 +59,7 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Save choices across launches through the existing background worker, Retry save action and normal-close flush, without autoplay.
 - Distinguish built-in Favorites from a manual playlist named Favorites through the dropdown's Playlist: name labels.
 
-### Sidecar LRC lyrics
+### Lyrics
 
 - Load a same-basename `.lrc` file beside the playing MP3 on every playback request, including Previous/Next, automatic advancement and repeat.
 - Browse a separate Lyrics tab while the now-playing information and playback controls stay available below it.
@@ -68,13 +68,19 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Use Reload lyrics to read a file added or edited during playback without restarting the song.
 - Read UTF-8 text with an optional BOM, repeated timestamps, simultaneous lines and signed millisecond offsets. File reads and parsing run in the background; obsolete results cannot replace the selected song's lyrics.
 
+- Fall back to lyrics stored inside the MP3 when the sidecar is missing, untimed, unreadable or over its limits.
+- Read embedded ordinary text and LRC-formatted lyric text, plus supported binary synchronized ID3 lyrics with millisecond timestamps.
+- Display plain embedded lyrics in their own virtualized, wrapped list with a no-timestamps hint. Plain-row selection, clicks and Enter leave playback unchanged.
+- Recheck both sources on playback/reload, with source/status messages, Unicode support and stale-request guards across format changes.
+- Read lyrics without editing the MP3, creating sidecars or adding lyric data to SQLite.
+
 ## Technology
 
 | Component | Current choice |
 | --- | --- |
 | Language and runtime | Java 25; development environment uses Eclipse Temurin 25.0.3 |
 | UI and audio | JavaFX 25.0.2: `javafx-controls` and `javafx-media` |
-| MP3 tags and embedded artwork | Jaudiotagger 3.0.1 |
+| MP3 tags, embedded artwork and embedded lyrics | Jaudiotagger 3.0.1 |
 | Saved library, favorites, playlists, metadata and playback preferences | Xerial SQLite JDBC 3.53.4.0 |
 | SQLite logging binding | `slf4j-nop` 1.7.36 at runtime |
 | Build and dependency management | Maven; IntelliJ IDEA's bundled Maven works |
@@ -89,7 +95,7 @@ The UI is constructed directly in Java; FXML is not used. The project has no `mo
 - Windows 11 is the current development and verification target.
 - A JDK 25 installation.
 - IntelliJ IDEA with Maven support, or a standalone Maven installation.
-- Internet access for the initial Maven dependency downloads. Normal playback, metadata, artwork and sidecar lyrics use local files.
+- Internet access for the initial Maven dependency downloads. Normal playback, metadata, artwork and lyrics use local files.
 
 ## Run in IntelliJ IDEA
 
@@ -113,7 +119,7 @@ IntelliJ's bundled Maven does not automatically make `mvn` available in PowerShe
 
 The database is `%LOCALAPPDATA%\MiSPlay\library.db` on Windows. If `LOCALAPPDATA` is unavailable, MiSPlay uses `.misplay/library.db` under Java's `user.home` directory. The directory and database are created automatically when needed.
 
-SQLite saves normalized absolute paths, insertion order, title, artist and album, plus each cached result's file size, modification time and cache-format version. It also stores favorite membership, playlist IDs/names/membership/order and volume, repeat mode and the shuffle switch. Audio files stay in their original locations. The playback queue, selected library view/tab/song, playback position, shuffled order, artwork cache and loaded lyric lines remain session-only. Lyrics are read from their sidecar files and are not stored in SQLite.
+SQLite saves normalized absolute paths, insertion order, title, artist and album, plus each cached result's file size, modification time and cache-format version. It also stores favorite membership, playlist IDs/names/membership/order and volume, repeat mode and the shuffle switch. Audio files stay in their original locations. The playback queue, selected library view/tab/song, playback position, shuffled order, artwork cache and loaded lyric lines remain session-only. Lyrics are read from local sidecars or the selected MP3’s tags and are not stored in SQLite.
 
 Schema 5 adds favorite membership while retaining paths, IDs, library order, valid caches, preferences and manual playlists from schema 4. Schemas 0–3 are supported too; missing caches fill in the background and absent preferences use defaults. Favorites starts empty on upgrade, independently of any manual playlist with that name. Keep a copy of `library.db` before upgrading; earlier application code cannot open schema 5. Later launches validate file attributes and reuse unchanged tags.
 
@@ -144,12 +150,25 @@ Built-in Favorites cannot be renamed or deleted. A manual **Playlist: Favorites*
 
 ## Using lyrics
 
-1. Put the MP3 and its UTF-8 lyric file in the same folder with the same basename: `My song.mp3` and `My song.lrc`. On Windows, make sure extensions are visible so the lyric file is not accidentally named `My song.lrc.txt`.
-2. Start the MP3 from the library or Open MP3, then select the **Lyrics** tab. Browsing/selecting another library row alone does not change the playing lyrics.
-3. The accented row follows playback. Click a row to seek to its time, or move the independent selection with the keyboard and press Enter. Seeking remains available while paused; unknown/zero duration, audio errors and lines beyond the song's duration prevent lyric seeks.
-4. Add or edit the sidecar, then click **Reload lyrics**. Playback and the captured queue continue; the loaded lines are replaced in the background. Replaying the song also rechecks its sidecar.
+1. For lyrics already saved inside an MP3, start that file and open **Lyrics**. A separate `.lrc` file is optional. If you edited lyrics in Musicolet on another device, copy the **updated MP3** to the Windows location MiSPlay actually plays; edits to a different copy do not update it automatically.
+2. To use a sidecar, keep the MP3 and its UTF-8 `.lrc` in the same folder with the same basename: `My song.mp3` and `My song.lrc`. Show filename extensions on Windows to avoid accidentally naming it `My song.lrc.txt`.
+3. Timed lyrics have an accented row following the playback clock. Click a row to seek, or select it with the keyboard and press Enter. Unknown/zero duration, audio errors and cues beyond duration prevent lyric seeks. Plain embedded lyrics show a no-timestamps hint and can be read by scrolling; plain-row clicks, Enter and selection do not seek or track the clock.
+4. Edit the sidecar or the MP3’s lyric tags, then click **Reload lyrics**. Both formats are cleared while a fresh background read selects the current source. Playback and the captured queue continue. Replaying the song also rechecks its lyrics.
 
-A small original example (also supplied as `examples/lyrics-demo.lrc` in the feature handoff):
+The first usable source wins:
+
+| Priority | Source | Display |
+| --- | --- | --- |
+| 1 | Matching sidecar with valid timed LRC entries | Synchronized rows |
+| 2 | Embedded lyric text containing valid LRC timestamps | Synchronized rows |
+| 3 | Supported embedded SYLT/SLT synchronized lyrics with millisecond timestamps | Synchronized rows |
+| 4 | Embedded ordinary lyric text | Scrollable plain rows |
+
+Within embedded text, the first usable timed variant wins; otherwise the first usable plain variant is retained while supported binary timing is checked. Up to 32 text variants and 32 synchronized frames are considered. There is no language/variant chooser yet. A bad sidecar allows embedded fallback rather than blocking it; if no source works, the status includes missing/invalid-source guidance. Browsing/selecting another library row alone leaves the playing song’s lyrics intact.
+
+Musicolet-edited MP3s can be read when the words are stored in supported ID3 lyric fields. This implementation has not yet been tested with the developer’s specific files, so confirm the actual edited copy on Windows. Supported tags are ID3v2.2/2.3/2.4: ULT/USLT text and supported SLT/SYLT binary timing. The reader handles tag-supported Unicode and legacy text encodings; the separate `.lrc` reader still requires UTF-8.
+
+A small original example of timed lyric text (usable as a sidecar, or pasted into an embedded lyric field in a tag editor):
 
 ```text
 [ti:MiSPlay lyrics check]
@@ -160,13 +179,17 @@ A small original example (also supplied as `examples/lyrics-demo.lrc` in the fea
 [00:20.00]Click a line to seek
 ```
 
-These are demonstration words, not lyrics or timings for a particular song. Rename the example to match any working test MP3 with sufficient duration.
+These are demonstration words, not lyrics or timings for a particular song. The embedded-lyrics handoff includes plain and timed demonstration text under `examples/`; MiSPlay does not edit tags itself.
 
 Supported timestamps have 1–6 minute digits, two second digits from 00–59, and an optional dot followed by 1–3 fractional digits: `[m:ss]`, `[mm:ss.xx]` and `[mm:ss.xxx]` are examples. Timestamps sort by time. Entries sharing an adjusted timestamp display together in file order; timed empty entries display **♪**. Headers and untimed/invalid-leading-timestamp lines are ignored. Recognized enhanced `<mm:ss.xx>` word markers are removed for readable line text; highlighting uses the leading line time.
 
 The last valid signed 32-bit `[offset:N]` applies globally in milliseconds: positive values show lyrics sooner, negative values later. For example, `[offset:+500]` makes `[00:02.00]` active at 1.5 seconds. Times before zero clamp to zero. Files are limited to 1 MiB, physical lines to 8,192 characters, and expanded timed entries to 10,000; exceeding a limit produces a recovery message without partial lyrics. Save legacy-encoded files as UTF-8 before reloading.
 
-No matching sidecar, an untimed file and an unreadable/invalid file have separate status messages. Lyric problems do not stop playback. Sidecars are re-read on playback/reload, with no continuous file watcher, lyric database cache, online lookup or embedded-tag fallback in this checkpoint.
+Binary synchronized lyrics use millisecond timestamps. When a SYLT frame marks line breaks, syllable fragments are combined into lines using each line’s first timestamp; without line breaks, each encoded entry remains a timed row. Recognized equal-time entries group together. MPEG-frame-based SYLT timing is not converted in this checkpoint; ordinary embedded text can still serve as a fallback. Plain text without usable timestamps is displayed rather than assigned guessed timing.
+
+For embedded reading, the leading ID3 tag is limited to 8 MiB including its header; a large embedded cover can make the whole tag exceed this limit even if its lyrics are small. Embedded text is limited to 262,144 Java characters, 10,000 lines/entries and 8,192 characters per line. A binary synchronized payload, including its description, is limited to 1 MiB. These are input/accepted-result bounds, not a total-memory guarantee; tag parsing can allocate temporary objects. A valid sidecar remains usable independently of the embedded tag.
+
+Lyric problems do not stop playback. Reads/reloads do not rewrite audio, create `.lrc` files or save lyrics in SQLite. There is no continuous file watcher, lyric cache, online lookup, plain external `.txt` fallback, tag editor or automatic timestamp generation. Export remains later work.
 
 ## Playback preferences
 
@@ -192,8 +215,9 @@ Only the shuffle switch is saved. A fresh queue can produce a new shuffled order
 | `src/main/java/com/misplay/service/ArtworkService.java` | Selected-song artwork loading, thumbnail caching and display properties |
 | `src/main/java/com/misplay/model/LyricLine.java` | Immutable adjusted timestamp and lyric text, including simultaneous lines |
 | `src/main/java/com/misplay/service/LrcParser.java` | Bounded line-timed text parsing, offsets, sorting and simultaneous grouping |
-| `src/main/java/com/misplay/service/LyricsService.java` | Background sidecar reads, status, immutable line views, latest-request guards and clock lookup |
-| `src/main/java/com/misplay/view/LyricsPane.java` | Virtualized wrapped lyric rows, clock highlighting, automatic scrolling, reload and click/Enter seeking |
+| `src/main/java/com/misplay/service/LyricsService.java` | Background source priority/fallback, status, immutable timed/plain views, latest-request guards and clock lookup |
+| `src/main/java/com/misplay/service/EmbeddedLyricsReader.java` | Bounded read-only ID3 text and synchronized-lyric extraction through Jaudiotagger |
+| `src/main/java/com/misplay/view/LyricsPane.java` | Separate virtualized timed/plain views, clock highlighting/following, reload and guarded timed seeking |
 | `src/main/java/com/misplay/model/` | Track metadata/status, folder-scan results and playback queue/repeat models |
 | `docs/DEVELOPMENT.md` | Architecture, manual checks and development conventions |
 | `docs/GIT_SETUP.md` | Initial commit and remote repository setup |
@@ -207,17 +231,19 @@ Run the [manual checks](docs/DEVELOPMENT.md#manual-checks) relevant to each chan
 
 The development guide distinguishes the manual checklist from development-time artwork, metadata, persistence and UI checks. Favorites passed 32 repository/migration, 20 service and 36 application/layout checks: 88 in total. The earlier playlist checkpoint's 150 checks are a separate recorded result and are not claimed as rerun for Favorites. These used a Java 17/JavaFX 21.0.1 harness with some substitute classes, so they do not establish a full Java 25/JavaFX 25.0.2 Windows build or audio regression result. A successful Maven validation alone does not compile the application or verify playback.
 
-The LRC checkpoint passed 27 parser/model, 24 sidecar-service and 38 application/layout checks (89 focused checks). The existing 32 repository, 20 library-service and 36 Favorites/application checks also passed against this checkpoint: **177 checks in total**. Coverage included rapid/same-path reloads, stale results, UTF-8/limits, clock boundaries/backward seeks, adjusted click/Enter seeks, audio-error guards, wrapped-row following after resize, queue navigation, shutdown and restart without autoplay. The same harness/substitute limits apply; real Windows playback and the full target build remain pending. See manual checks M201–M224.
+The LRC checkpoint passed 27 parser/model, 24 sidecar-service and 38 application/layout checks (89 focused checks). The existing 32 repository, 20 library-service and 36 Favorites/application checks also passed against this checkpoint: **177 checks in total**. Coverage included rapid/same-path reloads, stale results, UTF-8/limits, clock boundaries/backward seeks, adjusted click/Enter seeks, audio-error guards, wrapped-row following after resize, queue navigation, shutdown and restart without autoplay. The same harness/substitute limits apply. The developer subsequently reported sidecar files working; detailed Windows results for M201–M224 remain unrecorded.
+
+The embedded checkpoint passed **40 reader, 23 source-coordination and 26 application/layout checks** (89 focused), plus all 177 existing LRC/Favorites checks: **266 total**. Independent ID3 fixtures used generated silent MP3 audio and covered ID3v2.2/2.3/2.4, Unicode/encodings, binary timing, UTF-16 descriptions, source priority, malformed/bounded inputs, format switches, read-only behavior, reloads, stale/close guards and rendered plain/timed views. The complete Java 25/JavaFX 25.0.2 Windows build, actual audio synchronization and the developer’s Musicolet files still need local checks M225–M248. The harness did not decode MP3s for playback or exercise the production shuffle algorithm.
 
 ## Next milestone
 
-- Verify sidecar LRC playback and seeking locally on Windows, then add embedded-lyrics support in a later checkpoint.
+- Verify embedded lyrics with the updated Musicolet-edited MP3s on Windows, including timed/plain fallback and seeking. Explicit lyric export can follow as a separate checkpoint.
 
 ## Planned features
 
 - Playlist import/export improvements.
 - Additional metadata such as track number and improved handling of multiple artists.
-- Embedded lyric display and LRC export when usable timestamps are present.
+- Explicit embedded-lyric export to LRC when usable timestamps are present; plain-text export without inventing timing.
 - System tray controls and an optional mini-player/overlay.
 - A bundled Windows runtime and executable/installer through `jpackage`.
 - Manual or startup update checks.
@@ -227,7 +253,7 @@ The future Python LRC generator is a separate project. AI models are not part of
 ## Known limitations
 
 - MP3 is the current import/playback format; other audio formats are not part of this checkpoint.
-- Lyrics currently require a matching local UTF-8 `.lrc` sidecar. There is no embedded/plain-text lyric fallback, manual lyric-file chooser, online lookup, word-by-word highlighting or automatic file watching. The stated file/line/cue bounds are input limits, not a total-process memory guarantee.
+- Embedded lyrics currently cover supported MP3 ID3 fields, not every format supported by Musicolet. MPEG-frame-based SYLT timing, variant/language selection, external plain-text files, manual lyric-file selection, online lookup, word-level animation, tag editing, export and live watching are not implemented. File/tag/text/line/cue bounds do not cap total process memory.
 - Library paths/order, favorite membership, playlist names/membership/order, valid text metadata and playback preferences persist; the active queue, selected library view/tab/song, playback position, shuffled order, artwork cache and loaded lyrics are session-only. A new profile uses 50% / Repeat OFF / Shuffle OFF; saved choices override those defaults.
 - Playlists contain each path once and support manual single-song moves. Playlist import/export, drag ordering and library removal are not implemented. Saves replace a complete playlist snapshot per batch; large-playlist performance has not been profiled.
 - Favorites follows main-library insertion order and has no separate sorting or manual reordering. Accepted save batches replace its complete membership snapshot; large-favorites performance has not been profiled.
@@ -243,6 +269,8 @@ The future Python LRC generator is a separate project. AI models are not part of
 Low memory use, smooth scrolling and low idle CPU remain goals. The prototype has not been profiled, and no process-memory target is claimed as achieved. Measure the application separately from the IDE and Maven, and record the JDK, workload and measurement method.
 
 ## Development
+
+Each implementation handoff includes the updated README, changelog, development guide and exact commit message. Functional UI fixes continue with the features; the main visual redesign follows stable core behavior and performance checks, before final Windows packaging.
 
 See the [development guide](docs/DEVELOPMENT.md) for implementation principles and commit checkpoints, and the [changelog](CHANGELOG.md) for completed work.
 

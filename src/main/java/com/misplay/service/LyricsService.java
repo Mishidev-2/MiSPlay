@@ -24,14 +24,17 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Loads a selected song's local sidecar. Call public methods on the JavaFX thread. */
+/** Loads sidecar or embedded lyrics. Call public methods on the JavaFX thread. */
 public final class LyricsService implements AutoCloseable {
     private static final int MAX_FILE_BYTES = 1024 * 1024;
     private final ReadOnlyListWrapper<LyricLine> lines = new ReadOnlyListWrapper<>(
             FXCollections.unmodifiableObservableList(FXCollections.observableArrayList())
     );
     private final ReadOnlyStringWrapper message =
-            new ReadOnlyStringWrapper("Play a song to load its matching .lrc file.");
+            new ReadOnlyStringWrapper("Play a song to load sidecar or embedded lyrics.");
+    private final ReadOnlyListWrapper<String> plainLines = new ReadOnlyListWrapper<>(
+            FXCollections.unmodifiableObservableList(FXCollections.observableArrayList())
+    );
     private final ReadOnlyBooleanWrapper loading = new ReadOnlyBooleanWrapper();
     private final ExecutorService executor = Executors.newSingleThreadExecutor(runnable -> {
         Thread worker = new Thread(runnable, "misplay-lyrics");
@@ -45,7 +48,7 @@ public final class LyricsService implements AutoCloseable {
     private Task<LoadResult> activeTask;
     private boolean closed;
 
-    private record LoadResult(List<LyricLine> lines, String message) {}
+    private record LoadResult(List<LyricLine> lines, List<String> plainLines, String message) {}
 
     public ReadOnlyListProperty<LyricLine> linesProperty() {
         return lines.getReadOnlyProperty();
@@ -53,6 +56,10 @@ public final class LyricsService implements AutoCloseable {
 
     public ReadOnlyStringProperty messageProperty() {
         return message.getReadOnlyProperty();
+    }
+
+    public ReadOnlyListProperty<String> plainLinesProperty() {
+        return plainLines.getReadOnlyProperty();
     }
 
     public ReadOnlyBooleanProperty loadingProperty() {
@@ -74,6 +81,7 @@ public final class LyricsService implements AutoCloseable {
         request++;
         pendingPath = selectedPath;
         publishLines(List.of());
+        publishPlainLines(List.of());
         message.set("Loading lyrics...");
         loading.set(true);
         readNext();
@@ -109,18 +117,14 @@ public final class LyricsService implements AutoCloseable {
         Task<LoadResult> task = new Task<>() {
             @Override
             protected LoadResult call() throws Exception {
-                return readSidecar(audioPath);
+                return readLyrics(audioPath);
             }
         };
         activeTask = task;
         task.setOnSucceeded(event -> finish(task, readingRequest, task.getValue()));
         task.setOnFailed(event -> {
-            Throwable error = task.getException();
-            String detail = error instanceof CharacterCodingException
-                    ? "Save the .lrc file as UTF-8, then Reload lyrics."
-                    : error instanceof IllegalArgumentException ? error.getMessage()
-                    : "Check the matching .lrc file, then Reload lyrics.";
-            finish(task, readingRequest, new LoadResult(List.of(), "Lyrics unavailable. " + detail));
+            finish(task, readingRequest, new LoadResult(List.of(), List.of(),
+                    "Lyrics unavailable. Check the music file and .lrc file, then Reload lyrics."));
         });
         executor.execute(task);
     }
@@ -132,10 +136,48 @@ public final class LyricsService implements AutoCloseable {
         activeTask = null;
         if (readingRequest == request) {
             publishLines(result.lines());
+            publishPlainLines(result.plainLines());
             message.set(result.message());
             loading.set(false);
         }
         readNext();
+    }
+
+    private void publishPlainLines(List<String> value) {
+        plainLines.set(FXCollections.unmodifiableObservableList(FXCollections.observableArrayList(value)));
+    }
+
+    private static LoadResult readLyrics(Path audioPath) {
+        String sidecarMessage;
+        try {
+            LoadResult sidecar = readSidecar(audioPath);
+            if (!sidecar.lines().isEmpty()) {
+                return sidecar;
+            }
+            sidecarMessage = sidecar.message();
+        } catch (IOException | IllegalArgumentException | SecurityException error) {
+            sidecarMessage = error instanceof CharacterCodingException
+                    ? "Save the .lrc file as UTF-8, then Reload lyrics."
+                    : error instanceof IllegalArgumentException ? error.getMessage()
+                    : "Lyrics unavailable. The .lrc file could not be read.";
+        }
+        try {
+            EmbeddedLyricsReader.Result embedded = new EmbeddedLyricsReader().read(audioPath);
+            if (!embedded.timedLines().isEmpty()) {
+                return new LoadResult(embedded.timedLines(), List.of(), "Embedded lyrics · synchronized");
+            }
+            if (!embedded.plainLines().isEmpty()) {
+                return new LoadResult(List.of(), embedded.plainLines(),
+                        "Embedded lyrics · plain text (no timestamps)");
+            }
+            return new LoadResult(List.of(), List.of(), sidecarMessage + " No usable embedded lyrics."
+                    + (embedded.note().isEmpty() ? "" : " " + embedded.note()));
+        } catch (IOException | RuntimeException error) {
+            return new LoadResult(List.of(), List.of(), sidecarMessage
+                    + " Embedded lyrics unavailable. "
+                    + (error instanceof IOException ? error.getMessage()
+                            : "Check the music file, then Reload lyrics."));
+        }
     }
 
     private void publishLines(List<LyricLine> value) {
@@ -156,7 +198,7 @@ public final class LyricsService implements AutoCloseable {
                 bytes = input.readNBytes(MAX_FILE_BYTES + 1);
             }
         } catch (NoSuchFileException missing) {
-            return new LoadResult(List.of(), "No matching .lrc file. Place "
+            return new LoadResult(List.of(), List.of(), "No matching .lrc file. Place "
                     + sidecar.getFileName() + " beside the MP3, then Reload lyrics.");
         }
         if (bytes.length > MAX_FILE_BYTES) {
@@ -167,7 +209,7 @@ public final class LyricsService implements AutoCloseable {
                 .onUnmappableCharacter(CodingErrorAction.REPORT)
                 .decode(ByteBuffer.wrap(bytes)).toString();
         List<LyricLine> parsed = LrcParser.parse(text);
-        return new LoadResult(parsed, parsed.isEmpty()
+        return new LoadResult(parsed, List.of(), parsed.isEmpty()
                 ? "No valid timed lines in " + sidecar.getFileName() + "."
                 : "Lyrics: " + sidecar.getFileName());
     }
