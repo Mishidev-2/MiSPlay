@@ -4,7 +4,7 @@
 
 MiSPlay is a personal Windows 11 desktop project developed in small, working increments. Each increment should have a clear behavior to verify. Keep the architecture understandable and add dependencies when a feature needs them.
 
-The current checkpoint adds scoped album/artist browsing to library/Favorites/playlist sorting, independent saved playlist orders, MP3 playback/captured queues, expanded cached metadata, preferences, folder importing, artwork, lyrics and export. Schema remains 7 and metadata-cache format remains 2. All 24 real production sources compile on Java 25/JavaFX 25.0.2. Linux checks passed 119 browsing cases plus all 173 sorting regressions (292 total). Windows Maven/native dialogs, actual audio/synchronization and the developer’s specific files remain local verification. Queue/context-menu management, the supplied prototype’s full visual design, tray/overlay, updates and Windows packaging remain future work. Routine metadata/lyric/browse reads do not edit MP3s; explicit export writes a chosen lyric file.
+The current checkpoint adds explicit cover refresh to editable queue actions, scoped album/artist browsing and library/Favorites/playlist sorting, independent saved playlist orders, MP3 playback/captured queues, expanded cached metadata, preferences, folder importing, artwork, lyrics and export. Schema remains 7 and metadata-cache format remains 2. All 24 real production sources compile on Java 25/JavaFX 25.0.2. Linux checks passed 7 focused artwork service and 2 new App checks plus 332 queue/browsing/sorting regressions (341 total). Windows Maven/native dialogs, actual audio/synchronization and the developer’s specific files remain local verification. Queue/context-menu management, the supplied prototype’s full visual design, tray/overlay, updates and Windows packaging remain future work. Routine metadata/lyric/browse reads do not edit MP3s; explicit export writes a chosen lyric file.
 
 ## Current architecture
 
@@ -20,7 +20,7 @@ The current checkpoint adds scoped album/artist browsing to library/Favorites/pl
 | `MetadataService` | Read-only MP3 tag/header extraction, all artist values, optional numbers/duration and fallbacks | Controls, scheduling, file writes or artwork caching |
 | `FolderScanTask` | Recursive folder traversal, discovered paths, counts and cancellation checks | Adding tracks to the library or changing playback |
 | `FolderScanResult` | An unmodifiable copy of discovered files and a skipped-entry count | Scan execution or library changes |
-| `ArtworkService` | Selected-song artwork properties, its worker, latest waiting request and bounded thumbnail cache | Audio playback, library metadata reads or remote-image fetching |
+| `ArtworkService` | Selected-song artwork properties, its worker, explicit invalidation, latest waiting request and bounded thumbnail cache | Audio playback, library metadata reads or remote-image fetching |
 | `LyricLine` | Immutable adjusted timestamp and text for one line or simultaneous group | File reading, controls or audio playback |
 | `LrcParser` | Pure line-timed text parsing, limits, global offsets, sorting and simultaneous grouping | File reading, JavaFX state or audio playback |
 | `LyricsService` | Immutable timed/plain line views, source priority/fallback, worker, latest waiting request, status and binary clock lookup | Controls, audio execution, tag parsing, online fetching or SQLite |
@@ -374,7 +374,7 @@ A successful validation/read calls `Track.setMetadata` on the JavaFX Application
 
 A failed check/read clears the in-memory result, queues a clear of nullable scalar fields and artist rows, uses fallback text/unknown optional values and lets the next waiting Track proceed. The path remains a member. Selecting the file for playback or reimporting it explicitly retries after repair; failures do not trigger an automatic retry loop. Database clears/updates still depend on successful saving.
 
-Validation runs on startup, playback requests and reimport. It does not continuously watch files. An edit preserving size and modification time can evade detection. Artwork remains a separate session cache with no equivalent validation; its old cover can survive until eviction or restart. Metadata and artwork can still perform separate tag reads for the selected song.
+Validation runs on startup, playback requests and reimport. It does not continuously watch files. An edit preserving size and modification time can evade detection. Artwork remains a separate session cache without automatic file-attribute validation; explicit Reload cover or direct Open MP3/Add MP3s invalidates affected paths. Folder scans and external edits do not automatically invalidate artwork. Metadata and artwork can still perform separate tag reads for the selected song.
 
 #### Expanded cache writes
 
@@ -513,11 +513,17 @@ Metadata, scanner, artwork and lyrics workers are daemon threads. Cancellation i
 
 The database worker is deliberately non-daemon. Closing does not cancel accepted database tasks. When persistence is enabled, a final save includes active/waiting paths, completed metadata changes and the newest pending preferences/playlists/favorites, falling back to active snapshots when no newer one exists. Empty membership snapshots are retained. `shutdown()` lets the worker drain before JVM exit. Repeating path inserts, preference upserts or the same membership snapshots leaves the same saved data. Failed-save changes are included; another failure is logged and is not claimed as saved. Unfinished/cancelled metadata reads can be rebuilt from saved paths next launch. Shutdown does not wait on the JavaFX thread. A lock can delay exit until its background timeout; forced termination bypasses normal draining.
 
+### Explicit cover refresh
+
+The playback-options Reload cover button is enabled only after a queue song has been activated. It calls ArtworkService.invalidate for the current file without touching AudioService or the queue. Open MP3 and Add MP3s invalidate chosen files before the usual import/play operation; a folder scan currently has no direct artwork signal. Invalidation clears the selected image immediately, removes its positive or negative thumbnail cache entry and schedules a fresh read on the existing single artwork worker. If an invalidated path was being read already, a revision check discards its stale success/failure before caching or displaying, then starts the pending fresh read. The worker remains daemon-backed and close cancels/ignores late results. There is no tag write, new file watcher, persistent cover cache, new worker, or SQL migration.
+
 ## Verification status
 
 The developer has reported working playback/library metadata, folder importing, embedded artwork and SQLite library-path checkpoints. Per-ID Windows results for the complete checklist below have not been recorded; the rows describe checks to run, not a blanket pass claim.
 
 The current application was reported working after the metadata-cache and playback-preferences handoffs. The developer accepted manual playlists and Favorites and subsequently reported sidecar `.lrc` files working. Detailed per-scenario Windows results have not been recorded. The current embedded update still needs the developer’s local target-build and actual-file check.
+
+The cover-refresh checkpoint passed 7 focused service checks using generated silent MP3 files with red/blue embedded PNG covers and no-cover files, plus 2 new App-control checks and all 332 queue/browsing/sorting regressions: 341 total. All 24 production sources compiled with Azul JDK 25.0.3 / JavaFX 25.0.2. Headless Linux Monocle tests prove explicit invalidation of positive/negative cover cache and that old covers clear; actual Windows playback, native layout, folder scan interactions and specific user files remain local checks M361–M369.
 
 The editable-queue checkpoint passed 27 model and 13 actual application checks plus all 292 browsing/sorting regressions (332 total). The 24 production sources compiled directly with Azul OpenJDK 25.0.3 / JavaFX 25.0.2. Real production classes, SQLite and Linux headless Monocle 21.0.2 covered repeated occurrence IDs, insertion, staging, removal/movement, clear, shuffle/repeat navigation, song/queue controls, library capture and restart without queue restoration. Invalid media covered the error path, not real MP3 decoding/audio output; Windows controls, completion, native dialogs, actual Musicolet/Yaezakura files and process profiling remain local. M345–M360 are new manual checks. No committed automated project test suite was added.
 
@@ -961,6 +967,18 @@ Wait for restoration before using import/sort controls. Run storage fault/schema
 | M359 | Use song context menu Favorite/Unfavorite, Add to playlist and Remove from playlist on a multi-selection; also rename/delete a playlist while queued. | Existing membership rules and saved state apply; active queue/audio stay intact until explicit Play starts a new capture. |
 | M360 | At minimum 760×720 and default 820×780 on Windows, inspect Queue with long titles/credits, keyboard actions, scrolling, audio error and metadata refresh. | Queue/list actions remain usable, row tooltip has complete text, no stale title remains and failed audio does not crash. Record actual layout/audio results. |
 
+| ID | Action | Expected result |
+| --- | --- | --- |
+| M361 | Install the two replacement Java files and all three docs over the working editable-queue checkpoint, then run the full Java 25/JavaFX 25.0.2 project on Windows. | Project starts with Reload cover visible; no POM/module/database migration is needed. |
+| M362 | Play a song with an embedded cover, then edit that MP3's cover outside MiSPlay and press Reload cover. | Old cover clears and new cover appears without changing audio/queue/seek position. |
+| M363 | Remove the playing MP3's embedded cover, press Reload cover. | Placeholder says No embedded cover and old image does not return. |
+| M364 | Add a cover to a previously coverless playing MP3 and press Reload cover. | Negative cache is discarded and the newly embedded cover appears. |
+| M365 | Edit a nonplaying library MP3, explicitly select it through Add MP3s, then play it. | Its previous session thumbnail is invalidated and the updated cover loads. |
+| M366 | Use Open MP3 on an edited file that already had a cached cover. | Its cover reloads along with the selected song; no duplicate library entry. |
+| M367 | Rapidly change/reimport a cover while another artwork read is pending, then navigate away and back. | Stale work does not replace the latest selected image or repopulate the invalidated cache. |
+| M368 | Scan a folder after editing its current song's cover, then press Reload cover. | Explicit reload refreshes the image; the folder scan alone is not promised to invalidate it. |
+| M369 | Try Reload cover during pause and after completion, with unreadable/oversized art and a quick close. | Playback stays in its prior state, errors use the cover placeholder, and no late image appears after close. Record actual Windows results. |
+
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
 For a check failure, record the check ID, exact action, error text, JDK/JavaFX versions and whether the same file works elsewhere. Do not commit personal audio files as evidence.
@@ -1004,6 +1022,8 @@ The browsing checkpoint uses **`feat: add album and artist browsing`**. Add mode
 
 The editable-queue checkpoint uses **`feat: add editable playback queue and context actions`**. Replace model/PlaybackQueue.java and MiSPlayApp.java plus README.md, CHANGELOG.md and docs/DEVELOPMENT.md over the accepted browsing checkpoint. The patch ZIP includes SETUP.md, COMMIT_MESSAGE.txt, changes.diff and a continuation handoff. The other 22 Java sources and pom.xml remain unchanged. Schema stays 7, metadata-cache format 2 and queue state stays session-only. No repository commit/push or user database edit was performed in this environment.
 
+The cover-refresh checkpoint uses **`fix: refresh edited embedded artwork on demand`**. Replace service/ArtworkService.java and MiSPlayApp.java, plus README.md, CHANGELOG.md and docs/DEVELOPMENT.md, over the accepted editable-queue checkpoint. The ZIP includes SETUP.md, COMMIT_MESSAGE.txt, changes.diff and a refreshed continuation handoff. The other 22 Java sources and pom.xml are unchanged; schema 7/cache format 2 remain. The developer has reported the prior queue checkpoint committed and working; this checkpoint still needs local Windows verification before its own commit.
+
 For later checkpoints, update `CHANGELOG.md` when functionality changes. Update the README for changed features, prerequisites or run instructions. Update this guide when responsibilities, workflows or verification change. Do not invent documentation changes just to fill a checklist.
 
 ## Upcoming implementation notes
@@ -1018,7 +1038,7 @@ For later checkpoints, update `CHANGELOG.md` when functionality changes. Update 
 - Keep favorite/playlist edits independent from the active playback queue; profile full-snapshot saving before optimizing large collections.
 - Keep database work and expensive file/image operations off the JavaFX Application Thread, applying observable-model changes on that thread.
 - Preserve stable Track identity and captured playback-queue behavior while adding persistence.
-- Extend refresh/invalidation to artwork and path repair; text metadata already validates size/time on startup, playback requests and reimport.
+- Artwork now supports explicit manual/direct-reimport invalidation. Consider folder-scan signaling, automatic validation and missing-path repair as later scoped tasks; text metadata already validates size/time on startup, playback requests and reimport.
 - Keep tag reading and artwork decoding out of virtualized cell updates.
 - Record a Windows process-memory/CPU baseline before making optimization claims.
 

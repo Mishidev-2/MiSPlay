@@ -48,6 +48,7 @@ public final class ArtworkService implements AutoCloseable {
     private Path pendingPath;
     private Path readingPath;
     private Task<Image> activeTask;
+    private long readRevision;
     private boolean closed;
 
     public ReadOnlyObjectProperty<Image> imageProperty() {
@@ -85,6 +86,28 @@ public final class ArtworkService implements AutoCloseable {
         readNext();
     }
 
+    /** Forget a cover after an explicit reimport or a user-requested reload. */
+    public void invalidate(File file) {
+        if (closed) {
+            return;
+        }
+
+        Path path = file.toPath().toAbsolutePath().normalize();
+        cache.remove(path);
+
+        if (path.equals(readingPath)) {
+            // A read already in progress may contain the pre-edit cover.
+            readRevision++;
+        }
+
+        if (path.equals(selectedPath)) {
+            image.set(null);
+            message.set("Loading cover...");
+            pendingPath = path;
+            readNext();
+        }
+    }
+
     private void readNext() {
         if (closed || activeTask != null || pendingPath == null) {
             return;
@@ -92,6 +115,7 @@ public final class ArtworkService implements AutoCloseable {
 
         Path path = pendingPath;
         pendingPath = null;
+        long revision = readRevision;
 
         Task<Image> task = new Task<>() {
             @Override
@@ -105,6 +129,11 @@ public final class ArtworkService implements AutoCloseable {
 
         task.setOnSucceeded(event -> {
             if (closed || activeTask != task) {
+                return;
+            }
+
+            if (revision != readRevision) {
+                finishRead();
                 return;
             }
 
@@ -124,6 +153,11 @@ public final class ArtworkService implements AutoCloseable {
 
         task.setOnFailed(event -> {
             if (closed || activeTask != task) {
+                return;
+            }
+
+            if (revision != readRevision) {
+                finishRead();
                 return;
             }
 

@@ -6,6 +6,10 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 
 ### Added
 
+- Reload cover for the current MP3: explicit cache invalidation reads an edited, removed or newly added embedded image without restarting playback.
+- Open MP3 and Add MP3s invalidate affected thumbnails. An invalidated in-flight read cannot restore its stale image; subsequent artwork work stays on the existing worker.
+
+
 - Session-only editable playback queue with distinct occurrence IDs for repeated songs, queued staging without autoplay, Play next and Add to queue insertion, individual removal, upcoming reordering and Clear upcoming.
 - A functional Queue tab with current-entry indication, double-click/Enter activation, action buttons and a queue context menu; library song context menus expose playback, queue, playlist and Favorites commands.
 - Shuffle/Repeat navigation uses the edited occurrence order; turning Shuffle off preserves the current occurrence and restores the base order including inserted entries. Library playback still captures the visible sorted/filtered results as a new queue.

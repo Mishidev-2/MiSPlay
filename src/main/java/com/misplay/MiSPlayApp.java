@@ -235,6 +235,8 @@ public class MiSPlayApp extends Application {
         Label queueEmpty = new Label("Your queue is empty. Use a song's menu to add songs.");
         queueEmpty.setWrapText(true);
         queueList.setPlaceholder(queueEmpty);
+        Button reloadCoverButton = new Button("Reload cover");
+        reloadCoverButton.setId("reload-cover");
         Runnable refreshQueue = () -> {
             queueList.getItems().setAll(playbackQueue.entries());
             Entry current = playbackQueue.current();
@@ -243,6 +245,7 @@ public class MiSPlayApp extends Application {
 
         Runnable updateQueueButtons = () -> {
             refreshQueue.run();
+            reloadCoverButton.setDisable(playbackQueue.current() == null);
             previousButton.setDisable(!playbackQueue.hasPrevious());
             nextButton.setDisable(!playbackQueue.hasNext());
 
@@ -592,6 +595,12 @@ public class MiSPlayApp extends Application {
             audioService.loadAndPlay(file);
             updateQueueButtons.run();
         };
+        reloadCoverButton.setOnAction(event -> {
+            Entry current = playbackQueue.current();
+            if (current != null) {
+                artworkService.invalidate(current.file());
+            }
+        });
 
         Runnable playNext = () -> {
             File nextFile = playbackQueue.next();
@@ -635,6 +644,7 @@ public class MiSPlayApp extends Application {
                 return;
             }
 
+            artworkService.invalidate(selectedFile);
             libraryService.addFiles(List.of(selectedFile));
 
             playbackQueue.start(List.of(selectedFile), selectedFile);
@@ -651,6 +661,7 @@ public class MiSPlayApp extends Application {
                 return;
             }
 
+            selectedFiles.forEach(artworkService::invalidate);
             libraryService.addFiles(selectedFiles);
         });
 
@@ -1201,7 +1212,8 @@ public class MiSPlayApp extends Application {
         HBox playbackOptions = new HBox(
                 10,
                 repeatButton,
-                shuffleButton
+                shuffleButton,
+                reloadCoverButton
         );
 
         playbackOptions.setAlignment(Pos.CENTER);

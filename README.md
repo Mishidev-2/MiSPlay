@@ -2,7 +2,7 @@
 
 A personal Windows 11 desktop music player built with Java 25 and JavaFX. The project is developed in small increments, with an emphasis on understandable Java OOP, responsive controls and measured resource use.
 
-**Status:** MP3 prototype with editable session queue, song/queue context menus and searchable album/artist browsing within All songs, Favorites and playlists, Added order and Title/Artist/Album sorting, independent saved playlist orders, expanded cached metadata, sidecar/embedded lyrics and export, saved library/preferences, folder importing and artwork. All 24 production sources compile with Java 25/JavaFX 25.0.2 on Linux; the queue checkpoint passed 27 model and 13 application checks plus 292 browsing/sorting regressions (332 total). Schema 7 and metadata-cache format 2 are unchanged. Windows Maven, real audio/synchronization and native-dialog checks remain local work. The supplied prototype’s visual design and Windows packaging remain upcoming work.
+**Status:** MP3 prototype with explicit embedded-cover refresh, editable session queue, song/queue context menus and searchable album/artist browsing within All songs, Favorites and playlists, Added order and Title/Artist/Album sorting, independent saved playlist orders, expanded cached metadata, sidecar/embedded lyrics and export, saved library/preferences, folder importing and artwork. All 24 production sources compile with Java 25/JavaFX 25.0.2 on Linux; the cover-refresh checkpoint passed 7 focused service and 2 new application checks plus 332 earlier queue/browsing/sorting regressions (341 total). Schema 7 and metadata-cache format 2 are unchanged. Windows Maven, real audio/synchronization and native-dialog checks remain local work. The supplied prototype’s visual design and Windows packaging remain upcoming work.
 
 ## Current features
 
@@ -54,6 +54,7 @@ The earlier reader’s `getFirst(ARTIST)` discarded later stored artist values. 
 - Display the playing song's first stored embedded cover beside its metadata.
 - Load artwork on a background worker and keep an eight-entry cache of thumbnails fitted within 192 by 192 pixels.
 - Show placeholders for missing or unreadable covers and prevent an older result from replacing the selected song's artwork.
+- Use **Reload cover** beside the playback options after editing the playing MP3's embedded image. Explicit Open MP3 / Add MP3s reimports invalidate those covers as well; a stale in-flight read cannot reinsert its old result.
 
 ### Manual playlists
 
@@ -196,6 +197,10 @@ Artists groups each separately stored track-artist value. A collaboration with d
 
 Index query, direction and selected group are remembered per View/Browse combination for the session. The current Browse mode continues across View switches. Metadata regrouping coalesces completions over about 100 ms; choosing a different scope updates membership immediately. No tag/file reads, artwork decoding or database writes are added by browsing. Restart rebuilds indexes from cached metadata, resets browsing controls and leaves playback stopped. This checkpoint retains schema **7** and metadata-cache format **2**.
 
+## Refreshing an edited cover
+
+After changing the embedded cover in an MP3, choose **Reload cover** while that song is current. The old image clears and the worker reads the file again. A removed image becomes the normal No embedded cover placeholder; adding an image after a previous no-cover result works too. Using **Open MP3** or **Add MP3s** on an edited path also invalidates its saved thumbnail in this session. A folder re-scan does not currently signal the artwork cache, so use Reload cover if the current image remains stale. This reads only artwork and does not restart or seek audio, edit tags, or change the library/queue/database.
+
 ## Using the queue and context menus
 
 Right-click a song in the library to **Play**, **Play next**, **Add to queue**, **Add to playlist...**, **Favorite**, **Unfavorite** or **Remove from playlist**. Ctrl/Shift selection applies bulk actions to the selected songs in their currently displayed order. Right-clicking an unselected row selects that row first. Play captures the whole displayed and filtered song view as a new queue; it replaces prior queue edits. Play next inserts selected songs immediately after the current entry, preserving their selection order. Add to queue appends them, including repetitions. With no active song, Add to queue stages songs without autoplay; Play next starts the first selected song.
@@ -287,7 +292,7 @@ Only the shuffle switch is saved. A fresh queue can produce a new shuffled order
 | `src/main/java/com/misplay/view/LibraryBrowser.java` | Browse controls, scoped virtualized group index/detail, session state and coalesced metadata regrouping |
 | `src/main/java/com/misplay/service/MetadataService.java` | Read-only tag/header extraction, ordered artist values, optional numbers/duration and fallbacks |
 | `src/main/java/com/misplay/service/FolderScanTask.java` | Background folder traversal, counts and cancellation checks |
-| `src/main/java/com/misplay/service/ArtworkService.java` | Selected-song artwork loading, thumbnail caching and display properties |
+| `src/main/java/com/misplay/service/ArtworkService.java` | Selected-song artwork loading, explicit cache invalidation, thumbnail caching and display properties |
 | `src/main/java/com/misplay/model/LyricLine.java` | Immutable adjusted timestamp and lyric text, including simultaneous lines |
 | `src/main/java/com/misplay/service/LrcParser.java` | Bounded line-timed text parsing, offsets, sorting and simultaneous grouping |
 | `src/main/java/com/misplay/service/LyricsService.java` | Background source priority/fallback, status, immutable timed/plain views, latest-request guards and clock lookup |
@@ -304,6 +309,8 @@ Only the shuffle switch is saved. A fresh queue can produce a new shuffled order
 ## Verification
 
 Run the [manual checks](docs/DEVELOPMENT.md#manual-checks) relevant to each change. Working checkpoints have been reported by the developer; the complete per-check results have not been recorded. Automated project tests and a memory/CPU profiling baseline have not been introduced yet.
+
+The cover-refresh checkpoint passed **7 focused service checks and 2 new App-control checks**, plus the 332 earlier queue/browsing/sorting regressions: **341 total**. Generated silent MP3 files with red/blue embedded PNG covers tested changed/removed/new images and closed-service guards. All 24 production classes compiled with Azul JDK 25.0.3 / JavaFX 25.0.2. The headless Linux checks do not prove Windows native audio output or the user's actual edited files. Run M361–M369 locally. No schema, dependency or metadata-cache change.
 
 The queue checkpoint passed **27 queue-model and 13 actual application UI checks**, plus the **292 browsing/sorting regressions: 332 total**. All 24 production sources compiled directly with Azul OpenJDK 25.0.3 / JavaFX 25.0.2. Tests used real production classes and SQLite in Linux headless Monocle 21.0.2; invalid media exercised the audio-error path. Queue checks cover duplicate occurrence identity, staged playback, insertion, removal, moves, clear, shuffle/repeat navigation, song context actions, the Queue tab and restart without queue restoration. They do not prove native Windows playback/audio output, actual track completion or dialogs. Run M345–M360 and relevant earlier checks on Windows. No schema or metadata-cache migration was added.
 
@@ -323,7 +330,7 @@ The expanded-metadata checkpoint passed **31 model/reader, 45 repository/migrati
 
 ## Next milestone
 
-- Install the queue checkpoint over the working album/artist-browsing checkpoint; run Windows checks M345–M360 plus relevant earlier playback/browsing/lyrics cases.
+- Install this cover-refresh checkpoint over the working queue checkpoint and run Windows checks M361–M369 plus relevant earlier playback/browsing/lyrics cases.
 - Record a real Windows memory/CPU baseline and the remaining Windows audio, Musicolet, Yaezakura and native-dialog checks.
 - Implement the main visual redesign from the supplied prototype in a later checkpoint.
 
@@ -351,7 +358,7 @@ The future Python LRC generator is a separate project. AI models are not part of
 - Moved/deleted paths remain in the library. Background metadata validation detects unavailable files, but paths are not repaired automatically.
 - Title and album use the first usable values; artist lists use the documented structured/standard-field priority. Combined credits are not heuristically split. Header duration can differ from live playback duration. The actual Yaezakura file remains unverified; full artist reading and tooltips are implemented, but its specific issue is not claimed resolved.
 - Text metadata is checked on startup, playback requests and reimport. There is no continuous file watcher or content hash; edits preserving both size and modification time can evade detection. Previous values can remain visible while a background check is pending.
-- Failed metadata reads retry on explicit playback/reimport, without an automatic retry loop. Artwork remains session-only and can retain an older cover until eviction or restart.
+- Failed metadata reads retry on explicit playback/reimport, without an automatic retry loop. Artwork remains session-only; manual Reload cover and direct file reimport invalidate its thumbnail. Folder scanning and external edits are not watched automatically.
 - Artwork uses the first stored embedded cover. Linked URLs and external cover files are not loaded, and images that cannot be decoded into readable pixels use the unavailable placeholder.
 - Artwork payloads larger than 8 MiB are rejected after tag parsing. The thumbnail cache limit does not cap temporary parser/decoder allocations or total process memory.
 
