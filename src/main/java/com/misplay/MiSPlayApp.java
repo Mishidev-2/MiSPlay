@@ -1,6 +1,7 @@
 package com.misplay;
 
 import com.misplay.model.PlaybackQueue;
+import com.misplay.model.PlaybackQueue.Entry;
 import com.misplay.model.PlaybackPreferences;
 import com.misplay.model.Playlist;
 import com.misplay.service.AudioService;
@@ -49,6 +50,8 @@ import javafx.scene.control.SelectionMode;
 import javafx.scene.control.Tooltip;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.control.ContextMenu;
+import javafx.scene.control.MenuItem;
 
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.MouseButton;
@@ -226,7 +229,20 @@ public class MiSPlayApp extends Application {
         );
         folderStatusRow.managedProperty().bind(folderStatusRow.visibleProperty());
 
+        ListView<Entry> queueList = new ListView<>();
+        queueList.setId("queue-list");
+        queueList.setFixedCellSize(52);
+        Label queueEmpty = new Label("Your queue is empty. Use a song's menu to add songs.");
+        queueEmpty.setWrapText(true);
+        queueList.setPlaceholder(queueEmpty);
+        Runnable refreshQueue = () -> {
+            queueList.getItems().setAll(playbackQueue.entries());
+            Entry current = playbackQueue.current();
+            queueList.getSelectionModel().select(current);
+        };
+
         Runnable updateQueueButtons = () -> {
+            refreshQueue.run();
             previousButton.setDisable(!playbackQueue.hasPrevious());
             nextButton.setDisable(!playbackQueue.hasNext());
 
@@ -732,6 +748,12 @@ public class MiSPlayApp extends Application {
 
             // Let VirtualFlow size rows to the viewport, including long credits.
             cell.setPrefWidth(0);
+            cell.setOnMousePressed(event -> {
+                if (event.getButton() == MouseButton.SECONDARY && !cell.isEmpty()
+                        && !songList.getSelectionModel().isSelected(cell.getIndex())) {
+                    songList.getSelectionModel().clearAndSelect(cell.getIndex());
+                }
+            });
             cell.setOnMouseClicked(event -> {
                 if (event.getButton() == MouseButton.PRIMARY
                         && event.getClickCount() == 2
@@ -921,11 +943,182 @@ public class MiSPlayApp extends Application {
         moveUpButton.setOnAction(event -> moveSelected.accept(-1));
         moveDownButton.setOnAction(event -> moveSelected.accept(1));
 
+        // Context actions operate on the current multi-selection in visible order.
+        java.util.function.Supplier<List<Track>> selectedInOrder = () -> {
+            var selected = java.util.Set.copyOf(songList.getSelectionModel().getSelectedItems());
+            return visibleTracks.stream().filter(selected::contains).toList();
+        };
+        MenuItem playSelection = new MenuItem("Play");
+        MenuItem playNextItem = new MenuItem("Play next");
+        MenuItem addQueueItem = new MenuItem("Add to queue");
+        MenuItem addPlaylistItem = new MenuItem("Add to playlist...");
+        MenuItem favoriteItem = new MenuItem("Favorite");
+        MenuItem unfavoriteItem = new MenuItem("Unfavorite");
+        MenuItem removePlaylistItem = new MenuItem("Remove from playlist");
+        ContextMenu songMenu = new ContextMenu(playSelection, playNextItem, addQueueItem,
+                addPlaylistItem, favoriteItem, unfavoriteItem, removePlaylistItem);
+        songMenu.setOnShowing(event -> {
+            boolean empty = selectedInOrder.get().isEmpty();
+            playSelection.setDisable(empty);
+            playNextItem.setDisable(empty);
+            addQueueItem.setDisable(empty);
+            addPlaylistItem.setDisable(addToPlaylistButton.isDisabled());
+            favoriteItem.setDisable(favoriteButton.isDisabled());
+            unfavoriteItem.setDisable(unfavoriteButton.isDisabled());
+            removePlaylistItem.setDisable(removeFromPlaylistButton.isDisabled());
+        });
+        playSelection.setOnAction(event -> {
+            Track lead = songList.getSelectionModel().getSelectedItem();
+            if (lead != null) startQueue.accept(lead);
+        });
+        playNextItem.setOnAction(event -> {
+            List<File> files = selectedInOrder.get().stream().map(Track::getFile).toList();
+            if (files.isEmpty()) return;
+            if (playbackQueue.current() == null) {
+                playbackQueue.start(files, files.get(0));
+                playFile.accept(files.get(0));
+            } else {
+                playbackQueue.addNext(files);
+                updateQueueButtons.run();
+            }
+        });
+        addQueueItem.setOnAction(event -> {
+            playbackQueue.addToEnd(selectedInOrder.get().stream().map(Track::getFile).toList());
+            updateQueueButtons.run();
+        });
+        addPlaylistItem.setOnAction(event -> addToPlaylistButton.fire());
+        favoriteItem.setOnAction(event -> favoriteButton.fire());
+        unfavoriteItem.setOnAction(event -> unfavoriteButton.fire());
+        removePlaylistItem.setOnAction(event -> removeFromPlaylistButton.fire());
+        songList.setContextMenu(songMenu);
+
         HBox playlistSongControls = new HBox(
                 8, addToPlaylistButton, removeFromPlaylistButton, moveUpButton, moveDownButton,
                 favoriteButton, unfavoriteButton
         );
         playlistSongControls.setAlignment(Pos.CENTER_LEFT);
+
+        queueList.setCellFactory(view -> {
+            ListCell<Entry> cell = new ListCell<>() {
+                @Override protected void updateItem(Entry entry, boolean empty) {
+                    super.updateItem(entry, empty);
+                    if (empty || entry == null) {
+                        setText(null);
+                        setTooltip(null);
+                        return;
+                    }
+                    Track track = libraryService.getTrack(entry.file());
+                    String title = track.getMetadata().title();
+                    String detail = track.getMetadata().details();
+                    String label = (entry.equals(playbackQueue.current()) ? "▶ " : "")
+                            + title + "\n" + detail;
+                    setText(label);
+                    setTooltip(new Tooltip(label));
+                }
+            };
+            cell.setPrefWidth(0);
+            cell.setOnMousePressed(event -> {
+                if (event.getButton() == MouseButton.SECONDARY && !cell.isEmpty())
+                    queueList.getSelectionModel().clearAndSelect(cell.getIndex());
+            });
+            cell.setOnMouseClicked(event -> {
+                if (event.getButton() == MouseButton.PRIMARY && event.getClickCount() == 2
+                        && !cell.isEmpty() && cell.getItem() != null) {
+                    File file = playbackQueue.play(cell.getItem());
+                    if (file != null) playFile.accept(file);
+                    event.consume();
+                }
+            });
+            return cell;
+        });
+        libraryService.getTracks().addListener((ListChangeListener<Track>) change -> {
+            if (!queueList.getItems().isEmpty()) queueList.refresh();
+        });
+        queueList.setOnKeyPressed(event -> {
+            if (event.getCode() == KeyCode.ENTER) {
+                Entry selected = queueList.getSelectionModel().getSelectedItem();
+                if (selected != null) {
+                    File file = playbackQueue.play(selected);
+                    if (file != null) playFile.accept(file);
+                }
+                event.consume();
+            }
+        });
+        Button removeQueueButton = new Button("Remove entry");
+        removeQueueButton.setId("queue-remove");
+        Button moveQueueUp = new Button("Move earlier");
+        moveQueueUp.setId("queue-move-up");
+        Button moveQueueDown = new Button("Move later");
+        moveQueueDown.setId("queue-move-down");
+        Button clearUpcomingButton = new Button("Clear upcoming");
+        clearUpcomingButton.setId("queue-clear-upcoming");
+        Runnable updateQueueActions = () -> {
+            Entry selected = queueList.getSelectionModel().getSelectedItem();
+            int index = queueList.getItems().indexOf(selected);
+            int currentIndex = playbackQueue.currentIndex();
+            removeQueueButton.setDisable(selected == null || index == currentIndex);
+            moveQueueUp.setDisable(selected == null || index <= currentIndex + 1 || index <= 0);
+            moveQueueDown.setDisable(selected == null || index <= currentIndex
+                    || index >= queueList.getItems().size() - 1);
+            clearUpcomingButton.setDisable(queueList.getItems().size() <= currentIndex + 1);
+        };
+        queueList.getSelectionModel().selectedItemProperty().addListener(
+                (obs, old, item) -> updateQueueActions.run());
+        queueList.getItems().addListener((ListChangeListener<Entry>) change -> updateQueueActions.run());
+        removeQueueButton.setOnAction(event -> {
+            if (playbackQueue.remove(queueList.getSelectionModel().getSelectedItem())) updateQueueButtons.run();
+        });
+        moveQueueUp.setOnAction(event -> {
+            Entry selected = queueList.getSelectionModel().getSelectedItem();
+            if (playbackQueue.moveUpcoming(selected, -1)) {
+                updateQueueButtons.run();
+                queueList.getSelectionModel().select(selected);
+            }
+        });
+        moveQueueDown.setOnAction(event -> {
+            Entry selected = queueList.getSelectionModel().getSelectedItem();
+            if (playbackQueue.moveUpcoming(selected, 1)) {
+                updateQueueButtons.run();
+                queueList.getSelectionModel().select(selected);
+            }
+        });
+        clearUpcomingButton.setOnAction(event -> {
+            playbackQueue.clearUpcoming();
+            updateQueueButtons.run();
+        });
+        MenuItem queuePlay = new MenuItem("Play entry");
+        MenuItem queueRemove = new MenuItem("Remove entry");
+        MenuItem queueMoveUp = new MenuItem("Move up");
+        MenuItem queueMoveDown = new MenuItem("Move down");
+        MenuItem queueClear = new MenuItem("Clear upcoming");
+        ContextMenu queueMenu = new ContextMenu(queuePlay, queueRemove, queueMoveUp,
+                queueMoveDown, queueClear);
+        queueMenu.setOnShowing(event -> {
+            updateQueueActions.run();
+            queuePlay.setDisable(queueList.getSelectionModel().getSelectedItem() == null);
+            queueRemove.setDisable(removeQueueButton.isDisabled());
+            queueMoveUp.setDisable(moveQueueUp.isDisabled());
+            queueMoveDown.setDisable(moveQueueDown.isDisabled());
+            queueClear.setDisable(clearUpcomingButton.isDisabled());
+        });
+        queuePlay.setOnAction(event -> {
+            Entry entry = queueList.getSelectionModel().getSelectedItem();
+            if (entry != null) {
+                File file = playbackQueue.play(entry);
+                if (file != null) playFile.accept(file);
+            }
+        });
+        queueRemove.setOnAction(event -> removeQueueButton.fire());
+        queueMoveUp.setOnAction(event -> moveQueueUp.fire());
+        queueMoveDown.setOnAction(event -> moveQueueDown.fire());
+        queueClear.setOnAction(event -> clearUpcomingButton.fire());
+        queueList.setContextMenu(queueMenu);
+        HBox queueActions = new HBox(8, removeQueueButton, moveQueueUp,
+                moveQueueDown, clearUpcomingButton);
+        VBox queuePane = new VBox(8, queueList, queueActions);
+        queuePane.setPadding(new Insets(10, 0, 0, 0));
+        VBox.setVgrow(queueList, Priority.ALWAYS);
+        updateQueueActions.run();
 
         playButton.setOnAction(event -> audioService.play());
         pauseButton.setOnAction(event -> audioService.pause());
@@ -1065,7 +1258,8 @@ public class MiSPlayApp extends Application {
         libraryPane.setPadding(new Insets(10, 0, 0, 0));
         VBox.setVgrow(libraryBrowser, Priority.ALWAYS);
         TabPane mainTabs = new TabPane(
-                new Tab("Library", libraryPane), new Tab("Lyrics", lyricsPane)
+                new Tab("Library", libraryPane), new Tab("Queue", queuePane),
+                new Tab("Lyrics", lyricsPane)
         );
         mainTabs.setId("main-tabs");
         mainTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);

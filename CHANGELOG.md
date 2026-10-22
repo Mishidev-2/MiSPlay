@@ -6,6 +6,11 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 
 ### Added
 
+- Session-only editable playback queue with distinct occurrence IDs for repeated songs, queued staging without autoplay, Play next and Add to queue insertion, individual removal, upcoming reordering and Clear upcoming.
+- A functional Queue tab with current-entry indication, double-click/Enter activation, action buttons and a queue context menu; library song context menus expose playback, queue, playlist and Favorites commands.
+- Shuffle/Repeat navigation uses the edited occurrence order; turning Shuffle off preserves the current occurrence and restores the base order including inserted entries. Library playback still captures the visible sorted/filtered results as a new queue.
+
+
 - A Maven project targeting Java 25 with JavaFX controls/media, Git ignore rules, text line-ending configuration and project documentation.
 - Local MP3 selection and playback with Play/Pause controls, filename/title display and immediate/asynchronous audio error reporting.
 - `AudioService` ownership of the active media player, including disposal when a track is replaced or the application closes.

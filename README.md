@@ -2,7 +2,7 @@
 
 A personal Windows 11 desktop music player built with Java 25 and JavaFX. The project is developed in small increments, with an emphasis on understandable Java OOP, responsive controls and measured resource use.
 
-**Status:** MP3 prototype with searchable album/artist browsing within All songs, Favorites and playlists, Added order and Title/Artist/Album sorting, independent saved playlist orders, expanded cached metadata, sidecar/embedded lyrics and export, saved library/preferences, folder importing and artwork. All 24 production sources compile with Java 25/JavaFX 25.0.2 on Linux; this checkpoint passed 119 browsing checks plus 173 sorting regressions (292 total). Schema 7 and metadata-cache format 2 are unchanged. Windows Maven, real audio/synchronization and native-dialog checks remain local work. Queue management, the supplied prototype’s full visual design and Windows packaging remain upcoming work.
+**Status:** MP3 prototype with editable session queue, song/queue context menus and searchable album/artist browsing within All songs, Favorites and playlists, Added order and Title/Artist/Album sorting, independent saved playlist orders, expanded cached metadata, sidecar/embedded lyrics and export, saved library/preferences, folder importing and artwork. All 24 production sources compile with Java 25/JavaFX 25.0.2 on Linux; the queue checkpoint passed 27 model and 13 application checks plus 292 browsing/sorting regressions (332 total). Schema 7 and metadata-cache format 2 are unchanged. Windows Maven, real audio/synchronization and native-dialog checks remain local work. The supplied prototype’s visual design and Windows packaging remain upcoming work.
 
 ## Current features
 
@@ -19,6 +19,8 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Save volume, repeat mode and the shuffle switch, then restore them at startup while playback waits for a song selection.
 - Combine rapid control changes into a save after about 250 ms and capture the latest values on normal close.
 - Preserve the active queue during sorting, searches, imports, view changes, favorite edits and playlist edits/deletion.
+- Stage songs through the song context menu with **Play next** or **Add to queue**; inspect the session queue in the Queue tab. Repeated songs are separate entries.
+- Start an entry with double-click/Enter, remove a nonplaying entry, move upcoming entries, or clear upcoming entries without interrupting the current song.
 - Display playback errors and dispose of the previous audio player when switching files or closing the application.
 
 ### Library and metadata
@@ -194,6 +196,14 @@ Artists groups each separately stored track-artist value. A collaboration with d
 
 Index query, direction and selected group are remembered per View/Browse combination for the session. The current Browse mode continues across View switches. Metadata regrouping coalesces completions over about 100 ms; choosing a different scope updates membership immediately. No tag/file reads, artwork decoding or database writes are added by browsing. Restart rebuilds indexes from cached metadata, resets browsing controls and leaves playback stopped. This checkpoint retains schema **7** and metadata-cache format **2**.
 
+## Using the queue and context menus
+
+Right-click a song in the library to **Play**, **Play next**, **Add to queue**, **Add to playlist...**, **Favorite**, **Unfavorite** or **Remove from playlist**. Ctrl/Shift selection applies bulk actions to the selected songs in their currently displayed order. Right-clicking an unselected row selects that row first. Play captures the whole displayed and filtered song view as a new queue; it replaces prior queue edits. Play next inserts selected songs immediately after the current entry, preserving their selection order. Add to queue appends them, including repetitions. With no active song, Add to queue stages songs without autoplay; Play next starts the first selected song.
+
+Open the **Queue** tab to see the actual play order. Double-click a row or select it and press Enter to play that exact occurrence. The Queue tab's buttons and right-click menu remove one nonplaying entry, move an upcoming entry earlier/later, or clear upcoming entries. The currently playing occurrence cannot be removed or moved. Clearing upcoming keeps history and current playback; with an idle staged queue it clears all staged entries. Previous/Next and completion use the edited order, including Repeat and Shuffle. Turning Shuffle off restores the base order, including new entries; moving an upcoming entry commits the displayed order as the new base. Metadata changes update queue row text. Queue membership, edits and position remain session-only; saved Repeat/Shuffle preferences still restore.
+
+The Queue tab is a functional interim view. The planned visual redesign will put Queue and centred Lyrics in a shared right sidebar.
+
 ## Using lyrics
 
 1. For lyrics already saved inside an MP3, start that file and open **Lyrics**. A separate `.lrc` file is optional. If you edited lyrics in Musicolet on another device, copy the **updated MP3** to the Windows location MiSPlay actually plays; edits to a different copy do not update it automatically.
@@ -269,6 +279,7 @@ Only the shuffle switch is saved. A fresh queue can produce a new shuffled order
 | `src/main/java/com/misplay/service/AudioService.java` | Audio loading, playback, errors and player disposal |
 | `src/main/java/com/misplay/service/LibraryService.java` | Observable library/playlists, immutable favorite state, metadata validation/cache, workers, editing rules, preferences and restore/save coordination |
 | `src/main/java/com/misplay/persistence/LibraryRepository.java` | SQLite schema/migration, complete startup snapshots and transactional path/cache/preference/playlist/favorite writes |
+| `src/main/java/com/misplay/model/PlaybackQueue.java` | Session-only occurrence IDs, editable base/playback order, current position, navigation, repeat and shuffle |
 | `src/main/java/com/misplay/model/PlaybackPreferences.java` | Immutable volume, repeat-mode and shuffle choices with safe defaults |
 | `src/main/java/com/misplay/model/Playlist.java` | Immutable playlist ID/name and matching unique paths in manual and addition orders |
 | `src/main/java/com/misplay/model/TrackSort.java` | View-sort choices and cached-metadata comparators with stable addition-order ties |
@@ -294,6 +305,8 @@ Only the shuffle switch is saved. A fresh queue can produce a new shuffled order
 
 Run the [manual checks](docs/DEVELOPMENT.md#manual-checks) relevant to each change. Working checkpoints have been reported by the developer; the complete per-check results have not been recorded. Automated project tests and a memory/CPU profiling baseline have not been introduced yet.
 
+The queue checkpoint passed **27 queue-model and 13 actual application UI checks**, plus the **292 browsing/sorting regressions: 332 total**. All 24 production sources compiled directly with Azul OpenJDK 25.0.3 / JavaFX 25.0.2. Tests used real production classes and SQLite in Linux headless Monocle 21.0.2; invalid media exercised the audio-error path. Queue checks cover duplicate occurrence identity, staged playback, insertion, removal, moves, clear, shuffle/repeat navigation, song context actions, the Queue tab and restart without queue restoration. They do not prove native Windows playback/audio output, actual track completion or dialogs. Run M345–M360 and relevant earlier checks on Windows. No schema or metadata-cache migration was added.
+
 The browsing checkpoint passed **30 grouping-model, 24 browser-component, 53 actual application UI and 12 layout checks: 119 focused checks**. The previous **173 sorting checks were rerun: 292 total**. All 24 production sources compiled directly with Azul OpenJDK 25.0.3 / JavaFX 25.0.2 and the existing dependencies; no production class was substituted. Linux headless Monocle 21.0.2 tests cover structured/Unicode keys, compilations and fallback credits, multi-artist membership, scoped index queries/direction/session restoration, live model regrouping, close guards, sorting/moves/bulk-add, actual captured-queue Enter/Next wiring, empty profiles and restart without autoplay. Layouts were inspected at 820×780 and 760×720 with 240 tracks, 161 groups, an 80-song album, long credits and an audio error. Cached fixtures/direct model updates exercise regrouping; invalid media exercise audio errors, not real MP3 decoding. Windows Maven/audio/native dialogs, the actual Musicolet/Yaezakura files and profiling remain local checks M321–M344 plus relevant earlier cases. Metadata/lyric/export suites below were not rerun for browsing.
 
 The sorting checkpoint passed **35 model, 61 repository/migration, 24 service, 45 application UI and 8 layout checks: 173 total**. All 22 actual production classes compiled directly with Azul OpenJDK 25.0.3 / JavaFX 25.0.2 and the project dependencies. Linux headless Monocle 21.0.2 tests used real SQLite and production services/models, including the actual queue; no production substitute was used. Checks cover all sort modes, schemas 0–6, retained cache-format-2 data, independent playlist orders, migration/write rollback, newest-state retry/close, scoped search, live metadata resorting, selections, the actual bulk-add dialog and Enter/Next queue wiring. Rendered 820×780 and 760×720 layouts were inspected with 240 tracks and long credits. Invalid/missing media fixtures exercised audio-error handling, not real MP3 playback. Windows Maven/audio/native-dialog checks and profiling remain pending; run M297–M320 and relevant earlier checks locally. Earlier metadata/lyric/export test totals below are historical and were not rerun for sorting.
@@ -310,15 +323,14 @@ The expanded-metadata checkpoint passed **31 model/reader, 45 repository/migrati
 
 ## Next milestone
 
-- Install browsing over the working sorting checkpoint and record Windows checks M321–M344, alongside relevant sorting, metadata and lyric/export cases.
-- Next add queue/context-menu actions using the captured playback queue.
-- Measure performance before the main visual redesign based on the supplied prototype.
+- Install the queue checkpoint over the working album/artist-browsing checkpoint; run Windows checks M345–M360 plus relevant earlier playback/browsing/lyrics cases.
+- Record a real Windows memory/CPU baseline and the remaining Windows audio, Musicolet, Yaezakura and native-dialog checks.
+- Implement the main visual redesign from the supplied prototype in a later checkpoint.
 
 ## Planned features
 
 - Playlist import/export improvements.
 - Album artwork grids and additional visual list/detail layouts based on the supplied prototype.
-- Queue management through context menus and the queue view.
 - The supplied prototype’s navigation and bottom player, a shared Queue/Lyrics sidebar with centred lyrics, black/light/grey base colours and a saved configurable accent colour. Ratings and date-based sort controls are excluded.
 - System tray controls and an optional mini-player/overlay.
 - A bundled Windows runtime and executable/installer through `jpackage`.
@@ -333,6 +345,7 @@ The future Python LRC generator is a separate project. AI models are not part of
 - Library import order, favorite membership, playlist names/membership/manual order/addition sequence, valid text metadata and playback preferences persist; browse mode/group/query/direction, each View/Browse song-sort choice, the active queue, selected library view/tab/song, playback position, shuffled order, artwork cache and loaded lyrics are session-only. A new profile uses 50% / Repeat OFF / Shuffle OFF; saved choices override those defaults.
 - Playlists contain each path once and support manual single-song moves. Playlist import/export, drag ordering and library removal are not implemented. Saves replace a complete playlist snapshot per batch; large-playlist performance has not been profiled.
 - Favorites Added order follows main-library import order, not favorite-marking time; text sorting is available but manual reordering is not. Accepted save batches replace its complete membership snapshot; large-favorites performance has not been profiled.
+- The queue supports repeated file occurrences and entry-level actions, but it does not save queue history or support drag-and-drop. Its current view is a separate functional tab until the shared sidebar is built.
 - Browse controls and song-sort choices reset after restart. Album grouping uses names and ordered credits, without release IDs/folder heuristics; Artists uses track artists rather than album-artist-only credits. Artwork grids, artist album subpages and group-wide context menus are future UI work.
 - Upgraded playlists begin their addition sequence from the saved order available at migration; previously unrecorded addition history cannot be recovered. Language-specific collation and natural-number text sorting are not implemented.
 - Moved/deleted paths remain in the library. Background metadata validation detects unavailable files, but paths are not repaired automatically.
