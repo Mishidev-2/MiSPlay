@@ -99,8 +99,14 @@ public class MiSPlayApp extends Application {
     public void start(Stage stage) {
         Label trackLabel = new Label("Select a song to begin.");
         trackLabel.setWrapText(true);
+        trackLabel.setId("now-playing-title");
         Label metadataLabel = new Label();
+        metadataLabel.setId("now-playing-metadata");
         metadataLabel.setWrapText(true);
+        metadataLabel.setMaxHeight(76);
+        Tooltip metadataDetails = new Tooltip();
+        metadataDetails.textProperty().bind(metadataLabel.textProperty());
+        metadataLabel.setTooltip(metadataDetails);
         Label errorLabel = new Label();
         errorLabel.setWrapText(true);
         errorLabel.visibleProperty().bind(errorLabel.textProperty().isNotEmpty());
@@ -330,7 +336,7 @@ public class MiSPlayApp extends Application {
 
         TextField searchField = new TextField();
         searchField.setId("library-search");
-        searchField.setPromptText("Search filename, title, artist or album...");
+        searchField.setPromptText("Search filename, title, artists or album...");
 
         Playlist allSongs = new Playlist("all-songs", "All songs", List.of());
         Playlist favoritesView = new Playlist("favorites", "Favorites", List.of());
@@ -579,18 +585,20 @@ public class MiSPlayApp extends Application {
 
         songList.setPlaceholder(emptyLabel);
 
-        songList.setFixedCellSize(32);
+        songList.setFixedCellSize(52);
         songList.setMinHeight(120);
 
         songList.setCellFactory(listView -> {
             ListCell<Track> cell = new ListCell<>() {
                 private StringBinding rowText;
+                private final Tooltip details = new Tooltip();
 
                 @Override
                 protected void updateItem(Track track, boolean empty) {
                     super.updateItem(track, empty);
 
                     textProperty().unbind();
+                    details.textProperty().unbind();
 
                     if (rowText != null) {
                         rowText.dispose();
@@ -601,6 +609,7 @@ public class MiSPlayApp extends Application {
 
                     if (empty || track == null) {
                         setText(null);
+                        setTooltip(null);
                         return;
                     }
 
@@ -610,16 +619,19 @@ public class MiSPlayApp extends Application {
 
                                 return (libraryService.isFavorite(track) ? "★ " : "")
                                         + metadata.title()
-                                        + " — "
-                                        + metadata.artist();
+                                        + "\n" + metadata.details();
                             },
                             track.metadataProperty(), libraryService.favoriteFilesProperty()
                     );
 
                     textProperty().bind(rowText);
+                    details.textProperty().bind(rowText);
+                    setTooltip(details);
                 }
             };
 
+            // Let VirtualFlow size rows to the viewport, including long credits.
+            cell.setPrefWidth(0);
             cell.setOnMouseClicked(event -> {
                 if (event.getButton() == MouseButton.PRIMARY
                         && event.getClickCount() == 2
@@ -1049,8 +1061,7 @@ public class MiSPlayApp extends Application {
                     case PENDING -> "Waiting for tags...";
                     case LOADING -> "Reading tags...";
                     case FAILED -> "Tags unavailable — showing filename.";
-                    case LOADED -> track.getMetadata().artist()
-                            + " — " + track.getMetadata().album();
+                    case LOADED -> track.getMetadata().details();
                 },
                 track.metadataProperty(),
                 track.metadataStatusProperty()

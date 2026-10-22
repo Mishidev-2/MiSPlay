@@ -18,6 +18,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
@@ -25,9 +26,9 @@ import java.util.Set;
 
 /** Blocking database operations. Call these methods on the database worker. */
 public final class LibraryRepository {
-    private static final int SCHEMA_VERSION = 5;
+    private static final int SCHEMA_VERSION = 6;
     // Bump this when tag interpretation or fallback rules change.
-    private static final int METADATA_CACHE_VERSION = 1;
+    private static final int METADATA_CACHE_VERSION = 2;
     private final Path databasePath;
 
     /** A tag result together with the file attributes it was read from. */
@@ -114,12 +115,14 @@ public final class LibraryRepository {
 
     private static List<SavedTrack> readTracks(Connection connection) throws SQLException {
         List<SavedTrack> entries = new ArrayList<>();
+        ArtistRows names = readArtists(connection);
 
         try (Statement statement = connection.createStatement();
              ResultSet rows = statement.executeQuery(
                      """
-                     SELECT path, title, artist, album, file_size,
-                            modified_time, metadata_version
+                     SELECT id, path, title, artist, album, file_size,
+                            modified_time, metadata_version,
+                            track_number, disc_number, duration_millis
                      FROM library_tracks ORDER BY id
                      """
              )) {
@@ -132,7 +135,7 @@ public final class LibraryRepository {
 
                 // Missing files remain library members, including offline drives.
                 entries.add(new SavedTrack(
-                        path.normalize().toFile(), readCachedMetadata(rows)
+                        path.normalize().toFile(), readCachedMetadata(rows, names)
                 ));
             }
         }
@@ -244,7 +247,8 @@ public final class LibraryRepository {
                         """
                         UPDATE library_tracks
                         SET title = ?, artist = ?, album = ?, file_size = ?,
-                            modified_time = ?, metadata_version = ?
+                            modified_time = ?, metadata_version = ?,
+                            track_number = ?, disc_number = ?, duration_millis = ?
                         WHERE path = ?
                         """
                 )) {
@@ -252,8 +256,8 @@ public final class LibraryRepository {
                         CachedMetadata cached = change.cachedMetadata();
 
                         if (cached == null) {
-                            for (int index = 1; index <= 6; index++) {
-                                int type = index == 4 || index == 6
+                            for (int index = 1; index <= 9; index++) {
+                                int type = index == 4 || index >= 6
                                         ? java.sql.Types.BIGINT : java.sql.Types.VARCHAR;
                                 update.setNull(index, type);
                             }
@@ -264,9 +268,12 @@ public final class LibraryRepository {
                             update.setLong(4, cached.fileSize());
                             update.setString(5, cached.modifiedTime());
                             update.setInt(6, METADATA_CACHE_VERSION);
+                            setNumber(update, 7, cached.metadata().trackNumber());
+                            setNumber(update, 8, cached.metadata().discNumber());
+                            setNumber(update, 9, cached.metadata().durationMillis());
                         }
 
-                        update.setString(7, change.file().toPath()
+                        update.setString(10, change.file().toPath()
                                 .toAbsolutePath().normalize().toString());
                         update.addBatch();
                     }
@@ -277,6 +284,8 @@ public final class LibraryRepository {
                         }
                     }
                 }
+
+                saveArtists(connection, metadataChanges);
 
                 if (preferences != null) {
                     try (PreparedStatement save = connection.prepareStatement(
@@ -475,27 +484,140 @@ public final class LibraryRepository {
         }
     }
 
-    private static CachedMetadata readCachedMetadata(ResultSet row)
+    private record ArtistRows(
+            Map<Long, List<String>> artists, Map<Long, List<String>> albumArtists,
+            Set<Long> invalidTracks
+    ) {}
+
+    private static ArtistRows readArtists(Connection connection) throws SQLException {
+        Map<Long, List<String>> artists = new HashMap<>();
+        Map<Long, List<String>> albumArtists = new HashMap<>();
+        Set<Long> invalid = new HashSet<>();
+        try (Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery(
+                     "SELECT track_id, role, position, name FROM metadata_artists "
+                             + "ORDER BY track_id, role, position"
+             )) {
+            while (rows.next()) {
+                long id = rows.getLong("track_id");
+                String role = rows.getString("role");
+                if (!"artist".equals(role) && !"album_artist".equals(role)) {
+                    invalid.add(id);
+                    continue;
+                }
+                List<String> names = ("artist".equals(role) ? artists : albumArtists)
+                        .computeIfAbsent(id, ignored -> new ArrayList<>());
+                Object position = rows.getObject("position");
+                String name = rows.getString("name");
+                if (!isInteger(position) || ((Number) position).longValue() != names.size()
+                        || name == null || name.isBlank()) {
+                    invalid.add(id);
+                } else {
+                    names.add(name);
+                }
+            }
+        }
+        return new ArtistRows(artists, albumArtists, invalid);
+    }
+
+    private static CachedMetadata readCachedMetadata(ResultSet row, ArtistRows names)
             throws SQLException {
         String title = row.getString("title");
         String artist = row.getString("artist");
         String album = row.getString("album");
         String modifiedTime = row.getString("modified_time");
-        long fileSize = row.getLong("file_size");
-        boolean missingSize = row.wasNull();
+        Object size = row.getObject("file_size");
+        Object version = row.getObject("metadata_version");
+        long id = row.getLong("id");
+        List<String> artists = names.artists().getOrDefault(id, List.of());
 
-        if (row.getInt("metadata_version") != METADATA_CACHE_VERSION
-                || missingSize || fileSize < 0
+        if (!isInteger(version) || ((Number) version).longValue() != METADATA_CACHE_VERSION
+                || !isInteger(size) || ((Number) size).longValue() < 0
                 || title == null || title.isBlank()
-                || artist == null || artist.isBlank()
                 || album == null || album.isBlank()
-                || modifiedTime == null || modifiedTime.isBlank()) {
+                || modifiedTime == null || modifiedTime.isBlank()
+                || names.invalidTracks().contains(id) || artists.isEmpty()
+                || !String.join("; ", artists).equals(artist)) {
             return null;
         }
+        try {
+            TrackMetadata metadata = new TrackMetadata(
+                    title, artists, album, names.albumArtists().getOrDefault(id, List.of()),
+                    optionalInt(row, "track_number"), optionalInt(row, "disc_number"),
+                    optionalLong(row, "duration_millis")
+            );
+            return new CachedMetadata(metadata, ((Number) size).longValue(), modifiedTime);
+        } catch (IllegalArgumentException invalid) {
+            // Bad or obsolete cache data is a miss; library membership stays valid.
+            return null;
+        }
+    }
 
-        return new CachedMetadata(
-                new TrackMetadata(title, artist, album), fileSize, modifiedTime
-        );
+    private static boolean isInteger(Object value) {
+        return value instanceof Integer || value instanceof Long
+                || value instanceof Short || value instanceof Byte;
+    }
+
+    private static Long optionalLong(ResultSet row, String column) throws SQLException {
+        Object value = row.getObject(column);
+        if (value == null) {
+            return null;
+        }
+        if (!isInteger(value) || ((Number) value).longValue() <= 0) {
+            throw new IllegalArgumentException("Invalid cached " + column);
+        }
+        return ((Number) value).longValue();
+    }
+
+    private static Integer optionalInt(ResultSet row, String column) throws SQLException {
+        Long value = optionalLong(row, column);
+        if (value != null && value > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Invalid cached " + column);
+        }
+        return value == null ? null : value.intValue();
+    }
+
+    private static void setNumber(PreparedStatement statement, int index, Number value)
+            throws SQLException {
+        if (value == null) {
+            statement.setNull(index, java.sql.Types.BIGINT);
+        } else {
+            statement.setLong(index, value.longValue());
+        }
+    }
+
+    private static void saveArtists(Connection connection, List<SavedTrack> changes)
+            throws SQLException {
+        try (PreparedStatement delete = connection.prepareStatement(
+                "DELETE FROM metadata_artists WHERE track_id = "
+                        + "(SELECT id FROM library_tracks WHERE path = ?)"
+        ); PreparedStatement insert = connection.prepareStatement(
+                "INSERT INTO metadata_artists(track_id, role, position, name) "
+                        + "SELECT id, ?, ?, ? FROM library_tracks WHERE path = ?"
+        )) {
+            for (SavedTrack change : changes) {
+                String path = change.file().toPath().toAbsolutePath().normalize().toString();
+                delete.setString(1, path);
+                delete.executeUpdate();
+                if (change.cachedMetadata() == null) {
+                    continue;
+                }
+                TrackMetadata metadata = change.cachedMetadata().metadata();
+                for (String role : List.of("artist", "album_artist")) {
+                    List<String> names = role.equals("artist")
+                            ? metadata.artists() : metadata.albumArtists();
+                    for (int index = 0; index < names.size(); index++) {
+                        insert.setString(1, role);
+                        insert.setInt(2, index);
+                        insert.setString(3, names.get(index));
+                        insert.setString(4, path);
+                        if (insert.executeUpdate() != 1) {
+                            throw new SQLException("An artist's track is not in the saved library.");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private Connection openConnection() throws IOException, SQLException {
@@ -637,6 +759,33 @@ public final class LibraryRepository {
                         "SELECT track_id FROM favorite_tracks LIMIT 0"
                 )) {
                     // An incompatible existing favorites table must fail migration.
+                }
+
+                if (version < 6) {
+                    statement.execute("ALTER TABLE library_tracks ADD COLUMN track_number INTEGER");
+                    statement.execute("ALTER TABLE library_tracks ADD COLUMN disc_number INTEGER");
+                    statement.execute("ALTER TABLE library_tracks ADD COLUMN duration_millis INTEGER");
+                }
+                try (ResultSet ignored = statement.executeQuery(
+                        "SELECT track_number, disc_number, duration_millis "
+                                + "FROM library_tracks LIMIT 0"
+                )) {
+                    // Old metadata remains a version-1 cache miss until freshly read.
+                }
+                statement.execute("""
+                        CREATE TABLE IF NOT EXISTS metadata_artists (
+                            track_id INTEGER NOT NULL REFERENCES library_tracks(id)
+                                ON DELETE CASCADE,
+                            role TEXT NOT NULL CHECK (role IN ('artist', 'album_artist')),
+                            position INTEGER NOT NULL CHECK (position >= 0),
+                            name TEXT NOT NULL,
+                            PRIMARY KEY (track_id, role, position)
+                        )
+                        """);
+                try (ResultSet ignored = statement.executeQuery(
+                        "SELECT track_id, role, position, name FROM metadata_artists LIMIT 0"
+                )) {
+                    // An incompatible existing table fails the whole migration.
                 }
 
                 statement.execute("PRAGMA user_version = " + SCHEMA_VERSION);

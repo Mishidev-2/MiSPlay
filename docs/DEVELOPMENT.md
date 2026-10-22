@@ -4,7 +4,7 @@
 
 MiSPlay is a personal Windows 11 desktop project developed in small, working increments. Each increment should have a clear behavior to verify. Keep the architecture understandable and add dependencies when a feature needs them.
 
-The current checkpoint includes MP3 playback, captured queues with repeat/shuffle, saved Favorites and manual playlists, library paths/order and text metadata, saved playback preferences, background cache validation, folder importing and embedded album artwork. SQLite schema 5 adds favorite membership while retaining cached tags, playlists and volume/repeat/shuffle choices. Sidecar and embedded lyrics are implemented, including synchronized line highlighting, click/Enter seeking for usable timestamps and scrollable untimed embedded text. The developer reports sidecar files working. Explicit export now saves loaded synchronized lyrics as LRC or ordinary text as TXT. The export checkpoint passed 92 harness checks; the complete target build, native Windows Save As, real-audio synchronization and the developer’s specific Musicolet files remain pending locally. Tray/overlay behavior, updates and Windows packaging remain future work. Routine lyric reads remain read-only; user-requested exports write chosen files without changing schema 5.
+The current checkpoint includes MP3 playback, captured queues/repeat/shuffle, saved Favorites/manual playlists/library paths, expanded cached metadata, saved playback preferences, folder importing, embedded artwork, sidecar/embedded lyrics and explicit lyric export. Schema 6 adds track/disc/duration fields and ordered artist rows; cache format 2 refreshes old first-artist-only results. All 21 production sources compile on Java 25/JavaFX 25.0.2, with 116 focused metadata checks plus 58 lyric-export regressions (174 total) on Linux. Actual Windows Maven/native-dialog/audio behavior and the developer’s specific files remain local verification. Sorting, album/artist browsing, queue/context-menu management, the supplied prototype’s full UI, tray/overlay, updates and Windows packaging remain future work. Routine metadata/lyric reads do not edit MP3s; explicit export writes a chosen lyric file.
 
 ## Current architecture
 
@@ -15,9 +15,9 @@ The current checkpoint includes MP3 playback, captured queues with repeat/shuffl
 | `LibraryService` | Observable tracks/playlists, immutable favorite state, editing rules, metadata validation/cache, workers, active/pending preference/playlist/favorite snapshots, restore/save scheduling and storage status | Audio playback, artwork caching or SQL execution |
 | `LibraryRepository` | Database schema/migration, complete startup snapshots and transactional path/cache/preference/playlist/favorite writes | JavaFX controls, worker scheduling, tag parsing or audio bytes |
 | `Track` | A file, observable metadata/status and normalized search matching | File reading, worker scheduling or controls |
-| `TrackMetadata` | Immutable title, artist and album strings | Parser objects, artwork or loading state |
+| `TrackMetadata` | Immutable title/album, copied artist/album-artist lists, optional track/disc numbers and header duration, display formatting | Parser objects, artwork or loading state |
 | `MetadataStatus` | PENDING, LOADING, LOADED and FAILED states | Worker execution or persistence |
-| `MetadataService` | Reading tag strings and applying missing-field fallbacks | Controls, scheduling or artwork caching |
+| `MetadataService` | Read-only MP3 tag/header extraction, all artist values, optional numbers/duration and fallbacks | Controls, scheduling, file writes or artwork caching |
 | `FolderScanTask` | Recursive folder traversal, discovered paths, counts and cancellation checks | Adding tracks to the library or changing playback |
 | `FolderScanResult` | An unmodifiable copy of discovered files and a skipped-entry count | Scan execution or library changes |
 | `ArtworkService` | Selected-song artwork properties, its worker, latest waiting request and bounded thumbnail cache | Audio playback, library metadata reads or remote-image fetching |
@@ -32,7 +32,9 @@ The current checkpoint includes MP3 playback, captured queues with repeat/shuffl
 | `Playlist` | Immutable ID/name and normalized unique file paths in manual order | Track objects, observable editing state, playback execution or SQL |
 | `RepeatMode` | OFF, ALL and ONE choices | Queue navigation or playback execution |
 
-`LibraryRepository` also declares three nested transfer records: `CachedMetadata` contains tag strings and file attributes, `SavedTrack` contains a file and optional cache, and `LibraryState` contains copied track entries, preferences, copied playlists and an immutable favorite-file set loaded together. A null cache represents a cache miss when loading or a request to clear cached fields when saving. Favorites introduced no new model class. LRC adds `LyricLine`, `LrcParser`, `LyricsService` and `LyricsPane`, bringing that checkpoint to 19 top-level classes. Embedded reading adds `EmbeddedLyricsReader` (20 classes); export adds `LyricsExportService`, bringing the current table to **21 top-level classes**. `LyricsExportService.Snapshot` copies the normalized source path and one nonempty timed/plain list; private `ExportException` and `BoundedOutputStream` support write validation. `LyricsService` has a private nested `LoadResult` record for timed lines, plain lines and status. `EmbeddedLyricsReader.Result` holds copied timed/plain lists and a diagnostic note; its lists cannot both be nonempty.
+`LibraryRepository` also declares three nested transfer records: `CachedMetadata` contains the complete immutable TrackMetadata and file attributes, `SavedTrack` contains a file and optional cache, and `LibraryState` contains copied track entries, preferences, copied playlists and an immutable favorite-file set loaded together. A null cache represents a cache miss when loading or a request to clear cached fields when saving. Favorites introduced no new model class. LRC adds `LyricLine`, `LrcParser`, `LyricsService` and `LyricsPane`, bringing that checkpoint to 19 top-level classes. Embedded reading adds `EmbeddedLyricsReader` (20 classes); export adds `LyricsExportService`, bringing the current table to **21 top-level classes**. `LyricsExportService.Snapshot` copies the normalized source path and one nonempty timed/plain list; private `ExportException` and `BoundedOutputStream` support write validation. `LyricsService` has a private nested `LoadResult` record for timed lines, plain lines and status. `EmbeddedLyricsReader.Result` holds copied timed/plain lists and a diagnostic note; its lists cannot both be nonempty.
+
+The repository also has a private `ArtistRows` read helper for ordered artist maps and invalid-cache IDs. No top-level class is added by expanded metadata.
 
 ### Startup and saved library
 
@@ -40,10 +42,10 @@ The current checkpoint includes MP3 playback, captured queues with repeat/shuffl
 
 `LibraryRepository.defaultDatabasePath()` uses `%LOCALAPPDATA%\MiSPlay\library.db`, falling back to `.misplay/library.db` under Java's `user.home` when `LOCALAPPDATA` is missing or blank. Its constructor normalizes the path without touching the disk. Opening a connection creates the parent directory and database when needed. No separate SQLite server or `module-info.java` is required; Maven supplies `sqlite-jdbc` 3.53.4.0 and runtime `slf4j-nop` 1.7.36. The launcher's native-access option includes `ALL-UNNAMED` for the JDBC dependency.
 
-Schema version 5 is recorded with `PRAGMA user_version`. Startup upgrades schemas 0–4 transactionally: schemas 0/1 receive cached-tag columns, earlier schemas gain preferences and playlist/membership tables when needed, and all gain a favorite-membership table. Saved paths, IDs, library order, valid caches, manual playlists and existing playback settings are not replaced. The track table remains:
+Schema version **6** is recorded with `PRAGMA user_version`. Startup upgrades schemas 0–5 transactionally. Older schemas gain their missing path/cache/preferences/playlist/favorite structures as before; schema 6 adds nullable number/duration columns and ordered artist rows. Paths, stable IDs, library order, playlists, favorites and playback settings survive. The resulting track table is:
 
 ```sql
-CREATE TABLE IF NOT EXISTS library_tracks (
+CREATE TABLE library_tracks (
     id INTEGER PRIMARY KEY,
     path TEXT NOT NULL UNIQUE,
     title TEXT,
@@ -51,15 +53,27 @@ CREATE TABLE IF NOT EXISTS library_tracks (
     album TEXT,
     file_size INTEGER,
     modified_time TEXT,
-    metadata_version INTEGER
+    metadata_version INTEGER,
+    track_number INTEGER,
+    disc_number INTEGER,
+    duration_millis INTEGER
+);
+CREATE TABLE metadata_artists (
+    track_id INTEGER NOT NULL REFERENCES library_tracks(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('artist', 'album_artist')),
+    position INTEGER NOT NULL CHECK (position >= 0),
+    name TEXT NOT NULL,
+    PRIMARY KEY (track_id, role, position)
 );
 ```
 
-Metadata-cache format version 1 is separate from database schema version 5. Bump the cache-format constant when tag interpretation or fallback rules change, so older results become misses. Missing fields, negative sizes and unsupported cache-format versions are treated as uncached metadata rather than rejecting the saved paths.
+Metadata-cache format **2** is separate from schema **6**. Version-1 text caches remain in the old columns during migration but are treated as misses; a successful fresh read replaces them with complete metadata. The old `artist` column remains the joined display credit and is checked against its ordered artist rows. Names are not encoded by splitting that string: semicolons, slashes and other punctuation round-trip in individual names. Album-artist rows may be absent; a valid cache always has at least its fallback track artist.
+
+Cache reads reject unsupported/noninteger versions, invalid/missing file sizes, missing required text, inconsistent joined artists, invalid roles/positions/names and nonpositive/wrong-type/out-of-range optional numeric values. Such entries become misses while their paths remain. Missing optional numbers/duration are valid unknowns. Migration checks table compatibility before claiming schema 6 and rolls its DDL back on failure. Bump cache interpretation separately when reading/fallback rules change.
 
 `loadState()` reads paths/caches with `ORDER BY id`, the preferences row, playlists/memberships by saved positions and favorite membership in one read transaction. It validates absolute paths and returns normalized files without checking existence or starting playback. On the JavaFX thread, `LibraryService` assigns preferences, registers Tracks, restores playlist/favorite snapshots and schedules background cache checks without reinserting paths. All restored state is assigned before `restoringLibrary` becomes false. The app applies preferences to audio/queue/controls under a guard suppressing save requests. The original insertion order becomes the library order; filesystem traversal order is not guaranteed for a newly imported folder. The initial tab is Library, its view is All songs and its playback queue is empty; restoring stars schedules no favorite write.
 
-An initial restore/migration failure disables saving for that launch, displays a status message and enables temporary imports/playback/favorites/playlists/settings after loading finishes. An unreadable/corrupt database or schema version above 5 is not silently reset or replaced. Invalid playlist/favorite references, including orphan membership, also fail restoration instead of discarding data. Fix the storage problem and restart to retry restoration. Missing media paths retain library/playlist/favorite membership even if metadata or audio loading fails. Keep a database backup before upgrading; earlier application code cannot open schema 5.
+An initial restore/migration failure disables saving for that launch, displays a status message and enables temporary imports/playback/favorites/playlists/settings after loading finishes. An unreadable/corrupt database or schema version above 6 is not silently reset or replaced. Invalid playlist/favorite references, including orphan membership, also fail restoration instead of discarding data. Fix the storage problem and restart to retry restoration. Missing media paths retain library/playlist/favorite membership even if metadata or audio loading fails. Keep a database backup before upgrading; earlier schema-5 application code cannot open schema 6.
 
 ### Saving imported paths
 
@@ -208,7 +222,7 @@ The completion callback remains registered when individual players are replaced.
 
 The source list uses an extractor observing each track's `metadataProperty()`, so metadata changes produce list-update events.
 
-A `ListView<Track>` displays filtered/sorted entries through reusable cells with a fixed height of 32 pixels. Multiple selection supports Ctrl/Shift membership actions; playback activation uses the chosen row. Each populated cell binds its text to metadata and displays title — artist. Pending tracks use filename and Unknown artist fallbacks until their background read finishes; small files may update too quickly to observe the fallback.
+A `ListView<Track>` displays filtered/manual-order entries through reusable cells with a fixed height of **52 pixels**. Multiple selection supports Ctrl/Shift membership actions; playback activation uses the chosen row. Each populated cell binds two lines: optional favorite star plus title, then artists/album and known disc/track/header-duration details. A bound tooltip retains complete text. Cell preferred width is zero so VirtualFlow fits rows to the viewport instead of expanding horizontally for long credits. Empty/reused cells detach old bindings/tooltips. Pending tracks use filename/Unknown fallbacks until the background read finishes; small files may update too quickly to observe them. User-selectable text sorting is a later checkpoint.
 
 When a cell is reused, `updateItem` unbinds its text, disposes of its previous binding and clears empty-cell content before binding to another Track. Cell rendering uses in-memory values and does not read tags or decode artwork.
 
@@ -286,23 +300,25 @@ Separate `activeFavoriteFiles` and `pendingFavoriteFiles` snapshots preserve the
 
 ### Now-playing metadata
 
-`MetadataService` uses Jaudiotagger 3.0.1 to read an MP3's tags. It retrieves the first stored value for TITLE, ARTIST and ALBUM.
+`MetadataService` uses the existing Jaudiotagger 3.0.1 dependency to read tags and the audio header in a blocking call on the metadata worker. TITLE and ALBUM use their first nonblank value, falling back to filename and Unknown album. Track artists prefer nonblank `FieldKey.ARTISTS` values (ID3 TXXX:ARTISTS) and otherwise use all `FieldKey.ARTIST` values. Album artists similarly prefer `ALBUM_ARTISTS` (TXXX:ALBUM_ARTISTS) over standard `ALBUM_ARTIST` values. Unsupported optional key mappings are skipped. No album artist is fabricated when absent.
 
-Missing or blank titles fall back to the filename. Missing artists and albums use Unknown artist and Unknown album.
+Actual tag/NUL-delimited values are trimmed, blank values ignored and exact duplicate strings removed in original order. The reader never guesses separators from comma, slash, ampersand, semicolon or “feat.”; a combined credit remains one entry if that is how the tag stores it. An empty track-artist result becomes `["Unknown artist"]`. Display accessors `artist()` and `albumArtist()` join names with `; `, while the copied lists remain available for future grouping. Structured values take priority rather than being merged with potentially duplicate standard display credits.
 
-The service returns a `TrackMetadata` record containing strings and does not retain parser objects. `ArtworkService` reads embedded artwork separately and caches resized image pixels.
+`TrackMetadata` is now a seven-component immutable record: title, artists, album, albumArtists, nullable Integer trackNumber/discNumber and nullable Long durationMillis. The three-string constructor remains for existing loading/error fallbacks. Required text/list entries must be nonblank; copied names are stripped/deduplicated. Known numeric values must be positive; absent values are null. TRACK/DISC_NO supply the positive number before a possible total suffix, with invalid/overflow input becoming unknown. Track/disc totals are not stored. This number is an MP3 tag value, not a playlist addition position.
+
+Duration uses the audio header’s finite positive precise seconds, falling back to its whole seconds when needed, then rounds to milliseconds. Invalid/unknown values remain null. `durationText()` formats m:ss or h:mm:ss, using an em dash for unknown; `details()` omits unknown optional fields. This is an estimated library duration, not a replacement for MediaPlayer’s live duration/seek guard. No MediaPlayer is created while importing/reading metadata. The record retains no parser, cover or media objects; ArtworkService still reads/resizes cover pixels separately.
 
 `LibraryService` automatically schedules metadata validation when tracks are restored or imported. Unchanged cached files skip parsing; misses and changed files use `MetadataService`. Library rows and search results update as results arrive, without requiring playback.
 
 The shared `playFile` action calls `loadMetadata`, covering Open MP3, row activation, manual navigation and automatic queue advancement.
 
-`loadMetadata` releases the previous label bindings and binds the now-playing labels to the selected Track's metadata and loading status. Cached metadata appears immediately. Pending tracks display their filename fallback and `Waiting for tags...` or `Reading tags...` as appropriate.
+`loadMetadata` releases the previous label bindings and binds the now-playing labels to the selected Track's metadata and loading status. Validated cached metadata appears when its background attribute check completes. Pending tracks retain filename/previous text with `Waiting for tags...` or `Reading tags...` status as appropriate. Loaded details include all selected artist names, album and known disc/track/header duration. The label wraps within a 76-pixel maximum height and exposes its full value in a bound tooltip, keeping the shared player controls usable for long credits.
 
 Requesting playback asks `LibraryService` to prioritize a metadata check after the current check/read finishes, including for loaded or failed Tracks. This catches edits or repaired files. Completed results update their own Track objects; labels observe only the selected Track, so another result cannot replace the current song's details. Already displayed values can remain visible while revalidation is pending.
 
 Check/read failures replace stale text with filename/Unknown fallbacks, mark the Track FAILED, queue a stored-cache clear and show `Tags unavailable — showing filename.` for the selected track. Exceptions are logged independently of audio errors.
 
-Known issue: Yaezakura displays a shortened artist/details line even though Windows Properties lists artist and album information. The cause remains undiagnosed and investigation is deferred.
+The source inspection confirmed that the old `getFirst(ARTIST)` call discarded later values; the old UI also lacked complete row/detail tooltips. Those general limitations are addressed and cache format 2 forces a refresh. The actual Yaezakura file has not been supplied, so neither its tag encoding/field layout nor its Windows result has been verified. Check all stored fields and the new tooltip before claiming its specific issue resolved.
 
 ### Persistent metadata cache
 
@@ -310,15 +326,21 @@ Known issue: Yaezakura displays a shortened artist/details line even though Wind
 
 A new Track contains filename and Unknown artist/album fallbacks. Its status starts PENDING and progresses through LOADING to LOADED or FAILED. Revalidation can move an existing model through LOADING again. `isMetadataLoaded()` returns true only for LOADED.
 
-The metadata worker reads `BasicFileAttributes`, rejects non-regular files and compares size plus `lastModifiedTime().toString()` with the cache. Full timestamp text avoids deliberately truncating available precision to milliseconds. A match returns cached strings without calling the tag parser. Restored cache values are applied to Track properties only after this background validation.
+The metadata worker reads `BasicFileAttributes`, rejects non-regular files and compares size plus `lastModifiedTime().toString()` with the cache. Full timestamp text avoids deliberately truncating available precision to milliseconds. A match returns the complete cached TrackMetadata without calling the tag parser. Restored cache values are applied to Track properties only after this background validation.
 
 A miss reads tags, then checks size, modification time and file identity where available against the attributes captured before parsing. If they changed, it retries the read once using the newer attributes. Continued changes produce a failure instead of caching an unstable result. There is no file lock or full-file hash.
 
 A successful validation/read calls `Track.setMetadata` on the JavaFX Application Thread. Fresh reads also queue persistence; pure cache hits do not rewrite the database. Successful reads with missing tags cache their fallback values. Switching songs does not cancel a read; its result remains useful on its own Track.
 
-A failed check/read clears the in-memory result, queues nullable database fields, uses fallback text and lets the next waiting Track proceed. The path remains a member. Selecting the file for playback or reimporting it explicitly retries after repair; failures do not trigger an automatic retry loop. Database clears/updates still depend on successful saving.
+A failed check/read clears the in-memory result, queues a clear of nullable scalar fields and artist rows, uses fallback text/unknown optional values and lets the next waiting Track proceed. The path remains a member. Selecting the file for playback or reimporting it explicitly retries after repair; failures do not trigger an automatic retry loop. Database clears/updates still depend on successful saving.
 
 Validation runs on startup, playback requests and reimport. It does not continuously watch files. An edit preserving size and modification time can evade detection. Artwork remains a separate session cache with no equivalent validation; its old cover can survive until eviction or restart. Metadata and artwork can still perform separate tag reads for the selected song.
+
+#### Expanded cache writes
+
+The existing LibraryService scheduler is unchanged: it passes the complete immutable record inside CachedMetadata, so validation, identity, deduplication, retry and normal-close snapshots automatically carry new fields. No new metadata executor, per-cell tag read or playback request is added. Track search matches the joined artist and album-artist values as well as title/album/filename; the observable metadata extractor refilters results on updates.
+
+Repository saveChanges updates scalar cache fields, then replaces that track’s ordered artist/album-artist rows inside the same existing transaction as paths/settings/playlists/favorites. A clear removes scalar cache values and artist children together while preserving membership. Insertion failures roll back prior deletes and scalar changes. The newest pending record wins after a failed save or final close; no new retry path is introduced. Metadata refresh still runs after size/time validation, and it still cannot detect edits that preserve both attributes.
 
 ### Folder importing
 
@@ -491,6 +513,12 @@ For export, **56 export/service-capture checks, 34 lyric-component UI/layout che
 
 Component tests fired the actual button and replacement/error Alerts with an injected Save As callback; they tested cancellation, extension-before-confirmation, snapshots when the callback changes the track, track requests/reload during a blocked write, plain/timed switching, retry/status tooltips, adjusted timed Enter seeking and plain no-seek behavior. Rendered component images were inspected at 820×780 and 760×720. A separate JVM accepted an export, closed the service/exited JavaFX and produced the complete file before normal process exit. The native FileChooser was not opened in headless tests. The complete App and earlier 266-check embedded/LRC/Favorites suite were not rerun in this export harness. Actual Windows build, native dialogs, production audio/queue behavior and Musicolet files remain local work; no full-regression or performance result is claimed. Earlier focused export checks recorded before a temporary runtime reset are not added to the 92-count rerun. New manual checks are M249–M272.
 
+The expanded-metadata checkpoint compiled **all 21 real production classes** using **Azul OpenJDK 25.0.3 and JavaFX 25.0.2** with the project’s actual Jaudiotagger 3.0.1, SQLite JDBC 3.53.4.0 and SLF4J 1.7.36 dependencies. There were **31 model/reader, 45 repository/migration, 17 service and 23 full-application UI checks: 116 focused checks**, plus **56 export/service-capture and 2 export-exit regressions: 174 total**. No production audio, queue, Track, metadata or folder class was substituted in this checkpoint. The test harness uses headless Monocle 21.0.2 on Linux.
+
+Independent fixtures append generated silent MP3 bytes to ID3v2.2/2.3/2.4 data. Checks cover UTF-8/UTF-16 names, structured/standard priority, blank/deduplicated values, punctuation, title/album fallback, nullable/overflow numbers, actual header duration and read-only bytes. Real SQLite checks cover schemas 0–5, retained IDs/order/preferences/playlists/favorites, ordered-name round trips, unknown optional values, corrupt-cache isolation, cache clearing, combined/artist-write rollback, incompatible-table migration rollback and future/corrupt database preservation. Real service checks cover parser-call avoidance after restart/reimport, edits/missing/repair, newest retry after a database lock, normal-close snapshots and failed-startup session use.
+
+The full app was instantiated with its actual services and a disposable profile to check restored rows, metadata bindings, secondary/album-artist search, stars/manual order, recycled tooltips, bounded long details, virtualized 60-row rendering, captured queue order and close saves. Rendered default 820×780/minimum 760×720 layouts were inspected; a discovered horizontal expansion of long rows was corrected and the UI checks rerun. No actual MediaPlayer playback was started by those checks, so they establish neither audio decoding/synchronization nor Windows behaviour. The target Java compiler succeeded directly. Maven package was attempted but dependency transport failed through this environment’s proxy; it is not recorded as a successful Maven build. The earlier 266-check suite and 34 export component-UI checks remain separate historical results. No RAM/CPU baseline is claimed. New local checks are M273–M296; pending lyric checks still apply.
+
 ## Manual checks
 
 Use MP3 files outside the Git repository. A small set of known working files is sufficient. Record actual results; these rows are a checklist, not a claim that every case has passed.
@@ -573,7 +601,7 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M70 | Search and import files during shuffled playback, then activate another row. | The active queue stays unchanged until row activation captures a fresh queue from the visible results. |
 | M71 | Use Open MP3 with shuffle enabled; test Repeat ALL and ONE. | The queue contains one song, navigation buttons remain disabled, and automatic repeat works. |
 | M72 | Start another queue with shuffle enabled, then restart the app. | The ON switch is retained; the earlier queue/shuffled order is not restored. |
-| M73 | Play a tagged MP3. | The now-playing area displays its title, first stored artist value and album. |
+| M73 | Play a tagged MP3. | The now-playing area displays its title, all selected artist values, album and any known number/duration fields. |
 | M74 | Change songs through Open MP3, row activation, navigation and automatic advancement. | Metadata follows the current song. |
 | M75 | Skip several songs quickly. | An older result does not overwrite the final song's details. |
 | M76 | Play an untagged or partially tagged MP3. | Missing fields use the documented fallbacks. |
@@ -723,9 +751,9 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M220 | Load many original fixture lines with long wrapped text, jump far ahead/back and resize between default and minimum dimensions. | Current-line highlighting remains visible after layout settles; a virtualized subset of cells renders and shared controls/reload fit. |
 | M221 | Scroll lyrics manually without changing playback; click empty space or use a secondary click. | Manual browsing and nonactivation clicks do not seek. Following resumes on the next current-line change or resize. |
 | M222 | Close while a lyric read, waiting request or follow delay is active, then reopen. | No late lyric publication/scroll occurs after close; the new launch has empty lyrics, the Library tab and no autoplay. |
-| M223 | Inspect a disposable profile before/after lyric playback/reload, then verify Favorites/manual playlists/preferences after restart. | SQLite stays at schema 5; existing data survives. No lyric tables, persisted line snapshots or source-file edits appear. |
+| M223 | Inspect a disposable profile before/after lyric playback/reload, then verify Favorites/manual playlists/preferences after restart. | SQLite stays at the current schema 6; existing data survives. No lyric tables, persisted line snapshots or source-file edits appear. |
 | M224 | Play a supported enhanced LRC with leading line times plus `<word-time>` markers; then remove it from an MP3 with usable embedded lyrics. | Recognized word markers are hidden and line-level timing remains; removal permits the new embedded fallback instead of retaining obsolete sidecar rows. |
-| M225 | Install the three embedded Java files over the working LRC checkpoint and run with Java 25/JavaFX 25.0.2 on Windows. | The complete project compiles and opens; existing dependencies and schema 5 remain sufficient. Record the actual target-build result. |
+| M225 | Install the three embedded Java files over the working LRC checkpoint and run with Java 25/JavaFX 25.0.2 on Windows. | The complete project compiles and opens; existing dependencies remain sufficient; install the current metadata checkpoint too when using schema 6. Record the actual target-build result. |
 | M226 | Copy a Musicolet-edited MP3 to the Windows path MiSPlay plays, confirm no usable matching sidecar exists, and play it. | Supported embedded lyric tags load in Lyrics; record the actual file/tag format and result rather than assuming every editor option is identical. |
 | M227 | Use plain embedded words with paragraph breaks, Unicode and text resembling markup. | A wrapped plain list preserves the words/blank paragraphs literally and shows that timing is unavailable. |
 | M228 | Select plain rows, click them, press Enter and let the playback clock advance while reading farther down. | Plain interactions do not seek, create an active timed highlight or force clock-based scrolling. |
@@ -747,7 +775,7 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M244 | Navigate with Open MP3, Previous/Next, natural advancement and repeat among sidecar, embedded timed/plain and lyric-free songs. | Every playback request selects the current song’s source; lyric-free songs clear both prior formats and repeat rechecks bytes. |
 | M245 | Delay reads in a disposable harness, skip quickly among formats and reload the same path while its older read is active. | Only the newest request publishes; one latest waiting path is retained, even across timed/plain format changes. |
 | M246 | Read long wrapped plain and timed lyrics at default/minimum window sizes; switch tabs, reload and resize. | Both lists stay virtualized and readable, plain reload returns to the start, timed following settles on the current line, and shared controls fit. |
-| M247 | Change search, favorites, playlists and library selection while embedded lyrics play, then restart normally. | Captured audio/queue/lyrics remain tied to playback; restart retains saved library data but begins with empty lyric views and no autoplay. SQLite stays at schema 5. |
+| M247 | Change search, favorites, playlists and library selection while embedded lyrics play, then restart normally. | Captured audio/queue/lyrics remain tied to playback; restart retains saved library data but begins with empty lyric views and no autoplay. SQLite stays at the current schema 6. |
 | M248 | Close during an embedded read, queued request or timed follow delay, then launch again. | No late lyric publication/scroll occurs after close. Streams/tasks/listeners are released and no lyric state is restored automatically. |
 
 | M249 | Launch without lyrics, then play a timed song and reload it. | Export is disabled initially/during reads and enabled only after usable timed/plain lyrics arrive. |
@@ -772,8 +800,33 @@ Wait for restoration before using import controls. Run storage fault/schema chec
 | M268 | Export into a different folder, then export a matching sidecar beside the MP3 and reload. | Only the matching reloaded sidecar changes source priority; saving elsewhere does not change the reader. |
 | M269 | Export plain TXT and then reload the song. | TXT is an external output, not a new app source; embedded/sidecar priority is unchanged. |
 | M270 | Accept an export and close the window normally while its write is pending. | The run exits after the accepted write finishes; complete file remains and no late UI update occurs. |
-| M271 | Restart after exports and check library/Favorites/playlists/settings. | No export state/autoplay is restored; existing saved data remains at schema 5 and the original MP3 is unchanged. |
+| M271 | Restart after exports and check library/Favorites/playlists/settings. | No export state/autoplay is restored; existing saved data remains at the current schema 6 and the original MP3 is unchanged. |
 | M272 | Run the complete project with JDK 25/JavaFX 25.0.2 on Windows and real Musicolet files. | Compilation, native Save As/overwrite/Unicode paths, real playback synchronization and prior core controls work; record actual results. |
+
+| M273 | Install all five metadata files and run the complete project with JDK 25/JavaFX 25.0.2 on Windows. | The application compiles/opens with the existing pom and no module descriptor; record the real Maven/run result. |
+| M274 | Import an MP3 containing two or more separate ARTIST values. | Every usable artist appears in order in rows/details/tooltips and can be found by search. |
+| M275 | Use usable ARTISTS values plus a different standard display ARTIST credit. | Structured ARTISTS names take priority, without appending duplicate display credits. |
+| M276 | Use absent/blank structured fields and usable standard ARTIST/ALBUM_ARTIST values. | The reader falls back to all usable standard values; blank/exact duplicate names are ignored. |
+| M277 | Use Unicode ID3v2.2/v2.3/v2.4 fixtures, including UTF-16 and UTF-8 text. | Names decode and are searchable/displayable on Windows; verify actual file/font behaviour. |
+| M278 | Try names such as AC/DC, Earth, Wind & Fire and a credit containing a semicolon or feat. | Punctuation stays inside the stored value rather than being guessed as a list separator. |
+| M279 | Use multiple album artists, including ALBUM_ARTISTS and standard ALBUM_ARTIST cases. | Selected ordered values persist separately and can be found by search; missing album artists stay empty. |
+| M280 | Try a tagged track/disc number with a total suffix, such as 03/12 and 02/03. | The details show Track 3 and Disc 2; totals and playlist addition positions are not invented. |
+| M281 | Use missing, zero, negative, malformed and overflowing optional numbers. | Usable text/header metadata still loads; invalid optional values remain unknown. |
+| M282 | Import a valid MP3 before starting audio, including one without lyric or ordinary text tags. | Header duration appears when available; filename/Unknown fallbacks remain valid and no playback starts. |
+| M283 | Compare cached header duration with live playback, seeking, pause and completion. | The library estimate is readable; transport and seek guards continue to use MediaPlayer duration. |
+| M284 | Load long titles/artist credits at default and minimum window sizes; hover rows/details. | Rows fit without horizontal expansion, full tooltip text remains available and player controls fit. |
+| M285 | Scroll a large disposable library, change Favorites and switch All songs/Favorites/manual playlists. | Cells stay reusable, tooltips/stars update to the right item and current saved playlist order is retained. |
+| M286 | Search for a second artist and an album artist; edit/reimport tags during a search. | Matching updates as complete metadata arrives while Track identity and playback queue remain stable. |
+| M287 | On backed-up disposable schema 0–5 databases, open the new application. | Schema becomes 6 with paths/IDs/order/settings/playlists/favorites retained; old text caches rebuild in the background. |
+| M288 | Close after successful reads, relaunch unchanged files and observe metadata-read logs. | Complete cache-format-2 results return after attribute validation without fresh parser reads. |
+| M289 | Edit the exact played/imported MP3, then request playback or reimport it. | Changed attributes cause a fresh complete read/save; obsolete first-artist caches do not persist. |
+| M290 | Move/delete a cached file, request it, then repair/reimport it. | Failed metadata clears stale optional fields/artist rows, memberships remain and repair retries normally. |
+| M291 | In a disposable DB, corrupt an optional cache field, artist position/name or cache version. | Only that cache becomes a miss; valid paths and other cached tracks still restore. |
+| M292 | Use a disposable database lock to fail a save, change metadata again, release it and Retry save. | The newest whole record and ordered artist rows save together; current session data stays usable. |
+| M293 | Close normally with active/waiting metadata writes. | Accepted work drains; the newest complete metadata survives restart with settings/memberships retained. |
+| M294 | In disposable fixtures, force an artist insert/migration failure or open a future/corrupt DB. | Transactions roll back; unsupported data is not reset and failed startup uses a nonsaving session. |
+| M295 | Retest Yaezakura and compare its displayed credit/full tooltip against the actual stored tags. | Record the actual result; do not infer a file-specific resolution from generic multi-artist fixtures. |
+| M296 | Check LRC/embedded display, lyric export/cancel/replace, playback controls and source MP3 bytes. | Existing behaviour holds and metadata/lyric reads leave source audio/tags unchanged; commit only after relevant local checks. |
 
 Maven **validate** checks project configuration; it does not compile Java or verify audio. A successful application launch exercises compilation, while these checks verify playback behavior.
 
@@ -810,12 +863,18 @@ The embedded checkpoint uses `feat: support embedded MP3 lyrics` for its three c
 
 The export checkpoint uses **`feat: export timed and plain lyrics`**. Stage the new service/LyricsExportService.java, replacement service/LyricsService.java and view/LyricsPane.java, plus README.md, CHANGELOG.md and docs/DEVELOPMENT.md. SETUP.md contains installation/local verification instructions; COMMIT_MESSAGE.txt repeats the exact message and changes.diff reviews these files against the embedded checkpoint. Original example outputs are optional. There is no repository commit/push in this handoff; the developer installs, tests and commits in the real project.
 
+The expanded-metadata checkpoint uses **`feat: expand track metadata and caching`**. It replaces five Java files: MiSPlayApp, model/Track, model/TrackMetadata, service/MetadataService and persistence/LibraryRepository. Stage those with README.md, CHANGELOG.md and docs/DEVELOPMENT.md. All other Java sources and pom.xml stay as supplied. The incremental ZIP includes SETUP.md, COMMIT_MESSAGE.txt and changes.diff against the supplied export-era project. Local schema-6 migration occurs when the new code opens the developer’s profile; no real user database was opened or changed during development here.
+
 For later checkpoints, update `CHANGELOG.md` when functionality changes. Update the README for changed features, prerequisites or run instructions. Update this guide when responsibilities, workflows or verification change. Do not invent documentation changes just to fill a checklist.
 
 ## Upcoming implementation notes
 
 - Record local embedded/Musicolet checks M225–M248 and export checks M249–M272, including native dialogs and actual Windows playback. Plain export must never invent timestamps.
-- Investigate richer metadata/multiple artists and the shortened artist display after this checkpoint; retain the existing target-build and performance evidence limits.
+- Run metadata checks M273–M296, including actual Yaezakura tags and Windows playback; generic all-value reading/tooltips do not prove that file-specific issue resolved.
+- Next add Added order/Title/Artist/Album sorting with A–Z/Z–A across All songs, Favorites and playlists, retaining addition sequence separately from temporary view sorts and the active queue. No date sorting.
+- Use the supplied prototype for later Library/Albums/Artists/Playlists navigation, album grid/list/detail views, bottom transport and shared right-side Queue/Lyrics switching. Lyrics should be centre-aligned; plain text remains untimed. Queue/context-menu commands follow as their own checkpoint.
+- Theme requirements are black/charcoal, light text and grey secondary elements with a saved configurable accent colour; a colour-wheel control is feasible. Ratings are excluded throughout, even where shown in the prototype. Do not add the mockup’s date sort controls.
+- Keep original image aspect ratios. Mini/compact-player examples remain later design references, alongside tray/overlay work.
 - Keep functional layout/usability fixes with their features; perform the main visual redesign after core behavior is stable and performance has been measured, before final Windows packaging.
 - Keep favorite/playlist edits independent from the active playback queue; profile full-snapshot saving before optimizing large collections.
 - Keep database work and expensive file/image operations off the JavaFX Application Thread, applying observable-model changes on that thread.

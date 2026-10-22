@@ -73,6 +73,8 @@ public final class Track {
                 || values.artist().toLowerCase(Locale.ROOT)
                 .contains(normalizedQuery)
                 || values.album().toLowerCase(Locale.ROOT)
+                .contains(normalizedQuery)
+                || values.albumArtist().toLowerCase(Locale.ROOT)
                 .contains(normalizedQuery);
     }
 

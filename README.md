@@ -2,7 +2,7 @@
 
 A personal Windows 11 desktop music player built with Java 25 and JavaFX. The project is developed in small increments, with an emphasis on understandable Java OOP, responsive controls and measured resource use.
 
-**Status:** MP3 prototype with sidecar/embedded lyrics and explicit lyric export, saved Favorites, manual playlists, library paths, metadata and playback preferences, background file-change checks, folder importing and embedded album artwork. The developer reports that sidecar LRC files work in their project. The export checkpoint passed 92 development-harness checks. The complete Java 25/JavaFX 25.0.2 Windows build, native Save As behavior, real-audio synchronization and compatibility with the developer’s Musicolet-edited files still need local verification. Windows packaging remains upcoming work.
+**Status:** MP3 prototype with expanded cached metadata (artist lists, album artists, track/disc numbers and header duration), sidecar/embedded lyrics and lyric export, saved Favorites, manual playlists, library paths and playback preferences, folder importing and embedded artwork. All 21 production classes compile with Java 25/JavaFX 25.0.2 on Linux; this checkpoint passed 116 focused metadata checks and 58 export regressions (174 total). The complete Windows Maven run, actual MP3 playback/synchronization, native dialogs and the developer’s specific files still need local checks. Sorting controls, the supplied prototype’s full UI and Windows packaging remain upcoming work.
 
 ## Current features
 
@@ -29,12 +29,22 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Save imported paths and their library order in SQLite, then restore them in the background after restart without starting playback.
 - Show library loading/saving status and offer Retry save when a write fails.
 - Browse a virtualized song list with reusable fixed-height rows; start a song by double-clicking or pressing Enter.
-- Read title, artist and album tags for imported tracks in the background, without requiring playback.
+- Read title, all usable artist values, album artists, album and optional track/disc numbers for imported MP3s in the background, without requiring playback.
+- Read estimated duration from the MP3 audio header and cache it alongside text metadata. Playback/seek duration remains owned by MediaPlayer.
+- Display two-line fixed-height library rows and expanded now-playing details. Long text has complete tooltips and rows fit the viewport.
 - Prioritize the selected song's pending metadata read after the current read finishes.
 - Display filename and Unknown artist/album fallbacks when tags are missing.
-- Search filenames and cached titles, artists and albums, with results updating as metadata arrives.
+- Search filenames, cached titles, every artist, album artists and albums, with results updating as metadata arrives.
 - Reuse successful metadata across launches when file size and modification time still match, including successful missing-tag fallback values.
 - Check metadata on startup, playback requests and reimport; refresh edited files and allow repaired files to retry without restarting.
+
+### Metadata values
+
+`TrackMetadata` keeps immutable artist and album-artist lists. Separate `ARTISTS` / `ALBUM_ARTISTS` fields take priority when they contain usable values; otherwise the reader keeps every standard `ARTIST` / `ALBUM_ARTIST` value. Blank values are ignored, exact duplicates are removed in order and missing artists use Unknown artist. Display names join with `; `. Commas, slashes, ampersands, semicolons and “feat.” are not guessed as delimiters: they can be part of a real artist name. A single combined credit remains a single value unless the tag supplies separate values.
+
+Missing/blank title and album still use filename and Unknown album. Unknown track/disc numbers and duration are nullable, not zero or invented values; the current details line omits them. Track/disc totals are not stored in this checkpoint. Header duration is an estimate used before playback; the live seek slider continues to use MediaPlayer’s duration. Stored album artists prepare future browsing/grouping and are searchable; album/artist browsing screens are not implemented yet.
+
+The earlier reader’s `getFirst(ARTIST)` discarded later stored artist values. This checkpoint uses all usable values and adds tooltips for visually shortened details, then refreshes old caches. These address general causes of shortened credits. Yaezakura’s actual tags have not been supplied, so verify that specific file locally before considering its reported issue resolved.
 
 ### Album artwork
 
@@ -121,9 +131,9 @@ IntelliJ's bundled Maven does not automatically make `mvn` available in PowerShe
 
 The database is `%LOCALAPPDATA%\MiSPlay\library.db` on Windows. If `LOCALAPPDATA` is unavailable, MiSPlay uses `.misplay/library.db` under Java's `user.home` directory. The directory and database are created automatically when needed.
 
-SQLite saves normalized absolute paths, insertion order, title, artist and album, plus each cached result's file size, modification time and cache-format version. It also stores favorite membership, playlist IDs/names/membership/order and volume, repeat mode and the shuffle switch. Audio files stay in their original locations. The playback queue, selected library view/tab/song, playback position, shuffled order, artwork cache and loaded lyric lines remain session-only. Lyrics are read from local sidecars or the selected MP3’s tags and are not stored in SQLite.
+SQLite saves normalized absolute paths, insertion order, title, album, ordered artist/album-artist lists, optional track/disc numbers and header duration, plus each cached result's file size, modification time and cache-format version. It also stores favorite membership, playlist IDs/names/membership/order and volume, repeat mode and the shuffle switch. Audio files stay in their original locations. The playback queue, selected library view/tab/song, playback position, shuffled order, artwork cache and loaded lyric lines remain session-only. Lyrics are read from local sidecars or the selected MP3’s tags and are not stored in SQLite.
 
-Schema 5 adds favorite membership while retaining paths, IDs, library order, valid caches, preferences and manual playlists from schema 4. Schemas 0–3 are supported too; missing caches fill in the background and absent preferences use defaults. Favorites starts empty on upgrade, independently of any manual playlist with that name. Keep a copy of `library.db` before upgrading; earlier application code cannot open schema 5. Later launches validate file attributes and reuse unchanged tags.
+Schema **6** upgrades schemas 0–5 transactionally, preserving paths, IDs, library order, preferences, playlists and Favorites. It adds optional track/disc/duration columns and ordered `metadata_artists` rows. Metadata-cache format **2** invalidates old three-field caches so complete metadata is read once in the background; music files are not rewritten. Later launches reuse valid expanded caches after size/time validation. Unknown optional values stay unknown and still form valid cache hits. Keep a copy of `library.db` before upgrading; the earlier schema-5 application cannot open schema 6.
 
 Imports appear immediately and new paths/cache changes are saved in background batches. Favorite and playlist edits use the same worker; preference changes use it after a short UI save delay. If a save fails, current tracks/favorites/playlists/settings remain usable and **Retry save** retries pending changes, retaining newer metadata and favorite/playlist/preference snapshots over older failed writes. Normal shutdown captures the latest controls and drains accepted writes; a forced stop or unresolved storage error can leave changes unsaved.
 
@@ -227,7 +237,7 @@ Only the shuffle switch is saved. A fresh queue can produce a new shuffled order
 | `src/main/java/com/misplay/persistence/LibraryRepository.java` | SQLite schema/migration, complete startup snapshots and transactional path/cache/preference/playlist/favorite writes |
 | `src/main/java/com/misplay/model/PlaybackPreferences.java` | Immutable volume, repeat-mode and shuffle choices with safe defaults |
 | `src/main/java/com/misplay/model/Playlist.java` | Immutable playlist ID/name and unique ordered library paths |
-| `src/main/java/com/misplay/service/MetadataService.java` | Reading title, artist and album strings with fallbacks |
+| `src/main/java/com/misplay/service/MetadataService.java` | Read-only tag/header extraction, ordered artist values, optional numbers/duration and fallbacks |
 | `src/main/java/com/misplay/service/FolderScanTask.java` | Background folder traversal, counts and cancellation checks |
 | `src/main/java/com/misplay/service/ArtworkService.java` | Selected-song artwork loading, thumbnail caching and display properties |
 | `src/main/java/com/misplay/model/LyricLine.java` | Immutable adjusted timestamp and lyric text, including simultaneous lines |
@@ -255,15 +265,20 @@ The embedded checkpoint passed **40 reader, 23 source-coordination and 26 applic
 
 The export checkpoint passed **56 export/service-capture checks, 34 lyric-component UI/layout checks and 2 child-process exit checks: 92 total**. Coverage includes UTF-8/Unicode, millisecond/offset round trips, simultaneous/blank lines, plain paragraphs, extension and overwrite handling, limits, failure preservation/cleanup, source protection, snapshots across dialog/track changes, busy/retry states, timed seek/plain no-seek regression and normal-close draining. The three changed/new production classes compiled alongside the real unchanged lyric reader/parser/model using JDK 17/JavaFX 21.0.1 and an AudioService substitute. Rendered component layouts were inspected at 820×780 and 760×720. The earlier 266-check embedded/LRC/Favorites suite is historical and was **not rerun** for export. These results do not establish a complete target build, native Windows dialogs or actual MP3 decoding/synchronization. Run M249–M272 locally as well as pending embedded checks.
 
+The expanded-metadata checkpoint passed **31 model/reader, 45 repository/migration, 17 service and 23 application/UI checks: 116 focused checks**, plus **56 export/service-capture and 2 export-exit regressions: 174 total**. Tests used all actual production classes, independent ID3v2.2/2.3/2.4 fixtures with generated silent MP3 frames, real SQLite and JavaFX. The complete 21-class source compiled with Azul OpenJDK 25.0.3 and JavaFX 25.0.2; headless UI tests used Monocle 21.0.2 on Linux. Layout images were inspected at 820×780 and 760×720, including long credits. Maven package was attempted but its dependency transport could not reach the environment’s proxy; direct Java 25 compilation succeeded. These checks do not verify native Windows dialogs, actual audio output/decoding, the developer’s specific MP3s or a memory/CPU target. The earlier 266-check suite and the export checkpoint’s 34 component-UI checks were not rerun. Complete M273–M296 locally, with pending earlier lyric/export checks.
+
 ## Next milestone
 
-- Verify embedded/Musicolet behavior and lyric export on Windows, including native Save As, replacement, Unicode paths and normal close. Record M225–M272 results before the next feature.
-- After that checkpoint, investigate richer metadata/multiple artists and the shortened artist display, then measure performance before the main visual redesign.
+- Install and verify expanded metadata on Windows, particularly Yaezakura, multiple artists, existing library migration, duration and restart. Record M273–M296 and pending lyric/export checks M225–M272.
+- Then implement view sorting: Added order and Title/Artist/Album with A–Z/Z–A directions across All songs, Favorites and playlists. Playlists should default to addition order; changing a view sort must preserve stored membership order and the active captured queue. No date sorting.
+- Build album/artist browsing and later queue/context-menu actions around those data rules, then measure performance before the main visual redesign.
 
 ## Planned features
 
 - Playlist import/export improvements.
-- Additional metadata such as track number and improved handling of multiple artists.
+- Library/Favorites/playlist sorting with a return to added order, plus album/artist browsing.
+- Queue management through context menus and the queue view.
+- The supplied prototype’s navigation and bottom player, a shared Queue/Lyrics sidebar with centred lyrics, black/light/grey base colours and a saved configurable accent colour. Ratings and date-based sort controls are excluded.
 - System tray controls and an optional mini-player/overlay.
 - A bundled Windows runtime and executable/installer through `jpackage`.
 - Manual or startup update checks.
@@ -278,7 +293,7 @@ The future Python LRC generator is a separate project. AI models are not part of
 - Playlists contain each path once and support manual single-song moves. Playlist import/export, drag ordering and library removal are not implemented. Saves replace a complete playlist snapshot per batch; large-playlist performance has not been profiled.
 - Favorites follows main-library insertion order and has no separate sorting or manual reordering. Accepted save batches replace its complete membership snapshot; large-favorites performance has not been profiled.
 - Moved/deleted paths remain in the library. Background metadata validation detects unavailable files, but paths are not repaired automatically.
-- Metadata uses the first stored title, artist and album values. Yaezakura by HoyoMix displays a shortened artist/details line; the cause remains undiagnosed.
+- Title and album use the first usable values; artist lists use the documented structured/standard-field priority. Combined credits are not heuristically split. Header duration can differ from live playback duration. The actual Yaezakura file remains unverified; full artist reading and tooltips are implemented, but its specific issue is not claimed resolved.
 - Text metadata is checked on startup, playback requests and reimport. There is no continuous file watcher or content hash; edits preserving both size and modification time can evade detection. Previous values can remain visible while a background check is pending.
 - Failed metadata reads retry on explicit playback/reimport, without an automatic retry loop. Artwork remains session-only and can retain an older cover until eviction or restart.
 - Artwork uses the first stored embedded cover. Linked URLs and external cover files are not loaded, and images that cannot be decoded into readable pixels use the unavailable placeholder.

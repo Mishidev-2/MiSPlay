@@ -17,7 +17,7 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Manual Previous/Next navigation and automatic queue advancement, preserving the current volume.
 - Repeat Off, Repeat All and Repeat One, including queue wrapping and manual skipping while repeating one song.
 - Shuffle with consistent Previous/Next navigation, Repeat All support and restoration of the captured order when disabled; queue order lasts for the current session.
-- Jaudiotagger 3.0.1 integration for title, first stored artist value, album and embedded artwork reading.
+- Initial Jaudiotagger 3.0.1 integration for title, artist, album and embedded artwork reading, subsequently expanded below.
 - An observable `Track` model with metadata and PENDING, LOADING, LOADED or FAILED status, plus an immutable `TrackMetadata` record.
 - Automatic background metadata loading for imported tracks using one reader, priority for the selected song and continued loading after unreadable files.
 - Filename and Unknown artist/album fallbacks, plus metadata caching across queue changes and duplicate imports.
@@ -72,6 +72,12 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - Bounded staged background writes with existing-file/encoding/size validation, source-file/alias protection, staging cleanup and a non-daemon worker that drains an accepted export on normal close.
 - Shutdown handling for the audio player, label bindings, background metadata reads, folder scans and artwork work, plus draining accepted writes and a final path/cache/preferences/playlists/favorites save on normal close.
 
+- Expanded immutable TrackMetadata with ordered artist and album-artist lists, nullable track/disc numbers and millisecond header duration, retaining the three-string fallback constructor and joined artist accessors.
+- Read-only all-value tag extraction with structured ARTISTS/ALBUM_ARTISTS preference, standard-field fallback, Unicode, ordered exact deduplication and preservation of artist-name punctuation.
+- Schema 6 migration from schemas 0–5, adding optional metadata columns and normalized ordered metadata_artists rows while preserving library IDs/order, settings, manual playlists and Favorites.
+- Metadata-cache format 2 so old first-artist-only results are rebuilt once; strict cache validation treats invalid optional fields/artist rows as misses without discarding library membership.
+- Two-line 52-pixel library rows and expanded now-playing details, complete long-text tooltips, bounded now-playing wrapping and viewport-fitting rows.
+
 ### Changed
 
 - Metadata scheduling is owned by `LibraryService`. Changing songs prioritizes a waiting read without cancelling the active read; now-playing labels observe only the selected track.
@@ -84,13 +90,17 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - View choices now distinguish built-in All songs/Favorites from Playlist: name, preserving a pre-existing manual playlist named Favorites with its own data and order.
 - Favorite edits preserve the captured playback queue; built-in Favorites disables manual rename/delete/reorder controls. Startup restores favorite stars without autoplay or default-membership writes.
 
-- Library controls now live in a Library tab beside Lyrics; now-playing artwork, metadata and transport controls remain shared below the tabs. Lyrics are session/file based; SQLite stays at schema 5.
+- Library controls moved into a Library tab beside Lyrics, with shared now-playing/transport controls. Lyrics remain session/file based; that checkpoint kept SQLite at schema 5.
 - Shutdown now detaches lyric listeners, stops the one-shot follow delay, cancels the active lyric read and drops waiting work.
 
 - Reload now rechecks sidecar and embedded sources; source messages identify synchronized embedded lyrics or plain text. Ordinary lyric-file errors allow embedded fallback.
-- Plain/timed lyric state clears on new playback requests and normal startup; closing detaches the extra plain-view listener/bindings. SQLite remains at schema 5.
+- Plain/timed lyric state clears on new playback requests and normal startup; closing detaches the extra plain-view listener/bindings. That embedded checkpoint required no schema change.
 - The Lyrics header now includes Export lyrics, disabled until usable lyrics finish loading and while a save is active. Reload and playback remain available during file writing; export status has full-text tooltips for long messages.
 - Explicit export writes user-chosen files; routine playback/reload remains read-only. Saving a matching `.lrc` beside the MP3 makes it available through the existing Reload lyrics source priority. No App, dependency or schema change is required.
+
+- Artist search now matches every loaded artist and album artist. Existing generic LibraryService scheduling/retry/close logic carries the complete immutable metadata record without a service rewrite.
+- Cached artist values remain separate ordered rows rather than splitting a joined display string. Cache clearing and rollback cover both scalar metadata and artist rows in the existing transaction.
+- The first-value artist-reading limitation is removed and obsolete caches are refreshed. The developer’s specific Yaezakura tags are still unverified; no file-specific fix is claimed.
 
 ### Verification
 
@@ -110,4 +120,5 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 - The developer reported the sidecar LRC feature working with their `.lrc` files; embedded-file compatibility was requested next. Detailed per-ID Windows results remain unrecorded.
 - The embedded checkpoint passed 40 reader, 23 service/source-coordination and 26 application/layout checks, plus the existing 177 LRC/Favorites checks (266 total). Independent binary fixtures with generated silent MP3 audio covered ID3 versions/encodings, UTF-16 description boundaries, timed/plain source priority, syllable grouping, unsigned timestamps, malformed/bounded inputs, same-path edits, stale/close guards, read-only behavior and rendered default/minimum layouts. The three changed/new production classes compiled with unchanged project sources in the Java 17/JavaFX 21.0.1 harness. Full Java 25/JavaFX 25.0.2 Windows compilation, real playback synchronization and the developer’s actual Musicolet files remain pending locally; unavailable unchanged audio/queue/metadata/folder sources still used substitutes.
 - The export checkpoint passed 56 export/service-capture, 34 lyric-component UI/layout and 2 process-exit checks (92 total). Coverage includes Unicode and millisecond/offset round trips, translated/blank rows, plain paragraphs, extensions, accepted/declined overwrite dialogs, source/alias protection, staged failure preservation/cleanup, limits, track changes inside dialog callbacks, busy/retry states, adjusted timed seeking/plain no-seek behavior, rendered 820×780/760×720 components and accepted writes finishing on normal exit. The three changed/new production classes compiled with the real unchanged lyric reader/parser/model under JDK 17/JavaFX 21.0.1 and an AudioService substitute. The earlier 266-check suite was not rerun for export. Full target Windows build/audio, native Save As and actual Musicolet-file checks remain pending; local export checks are M249–M272.
+- Expanded metadata passed 31 model/reader, 45 repository/migration, 17 service and 23 actual application/UI checks (116 focused), plus 56 export/service-capture and 2 process-exit regressions: 174 total. All 21 production sources compiled with Azul OpenJDK 25.0.3 / JavaFX 25.0.2. Tests used actual production classes, independent ID3 fixtures with generated MP3 audio bytes, real SQLite and Linux headless JavaFX/Monocle 21.0.2. Coverage includes artist punctuation/priority, numbers/header duration, schemas 0–5, corrupt-cache isolation, rollback, cache reuse/live refresh, failure/retry/newest-close saves, search, virtualized row reuse, long-text layout, memberships and no startup autoplay. The prior 266-check suite and 34 export component-UI checks were not rerun. Maven package dependency resolution was blocked by the environment’s proxy; direct target-version compilation succeeded. Actual Windows Maven/native dialog/audio checks, Musicolet and Yaezakura files, and process-memory/CPU profiling remain pending; metadata manual checks are M273–M296.
 - No committed automated project test suite or memory/CPU profiling baseline has been recorded.
