@@ -1058,3 +1058,12 @@ No memory/CPU baseline has been recorded for MiSPlay. Capture separate measureme
 
 - [JavaFX FileChooser](https://openjfx.io/javadoc/25/javafx.graphics/javafx/stage/FileChooser.html)
 - [Java Files moves and atomic-move behavior](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/nio/file/Files.html)
+
+
+## Phase 0 pre-UI baseline and sidebar decisions (2026-10-24)
+
+The next check is a **Windows 11 JDK 25 baseline**, not a performed measurement. See [`PERFORMANCE_BASELINE.md`](PERFORMANCE_BASELINE.md) and use the read-only `tools/Measure-MiSPlay.ps1` process sampler. Measure Idle, Playback, Browsing, Import and Artwork separately, recording actual CPU/memory values, workload and machine. Static review in a Java 21/no-Maven environment cannot validate the Java 25 Maven build, actual Windows audio or native dialogs. No application service or database change is included.
+
+UI decision locked: right sidebar retains artwork and current track metadata above a Lyrics/Queue switch; preserve Queue entry IDs/order and existing LyricsPane timing and manual plain-text scrolling. Remove ratings. Favorite Album applies to all album tracks. Full UI first; mini/compact later. Playback queue and position remain session-only.
+
+Suggested documentation/checkpoint commit: `docs: add Windows performance baseline and sidebar decisions`.

@@ -6,6 +6,9 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 
 ### Added
 
+- Phase 0 Windows performance baseline instructions and a read-only process sampler (`tools/Measure-MiSPlay.ps1`); no baseline results claimed.
+- Documented UI decisions: right Now Playing sidebar with fixed artwork/metadata above switchable Lyrics/Queue, album-wide favorite toggle, no ratings, and compact/mini later.
+
 - Reload cover for the current MP3: explicit cache invalidation reads an edited, removed or newly added embedded image without restarting playback.
 - Open MP3 and Add MP3s invalidate affected thumbnails. An invalidated in-flight read cannot restore its stale image; subsequent artwork work stays on the existing worker.
 

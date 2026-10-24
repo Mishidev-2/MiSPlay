@@ -373,3 +373,8 @@ Each implementation handoff includes the updated README, changelog, development 
 See the [development guide](docs/DEVELOPMENT.md) for implementation principles and commit checkpoints, and the [changelog](CHANGELOG.md) for completed work.
 
 JavaFX dependencies and launcher configuration follow the [OpenJFX Maven guide](https://openjfx.io/openjfx-docs/maven).
+
+
+## Windows performance baseline (Phase 0)
+
+Before the visual overhaul, run the read-only `tools/Measure-MiSPlay.ps1` sampler on Windows 11 and record each workload using [docs/PERFORMANCE_BASELINE.md](docs/PERFORMANCE_BASELINE.md). The baseline has **not yet been measured**; this adds instructions and a sampler, not benchmark results. The agreed UI layout keeps artwork and metadata at the top of the right sidebar and switches its lower area between Lyrics and Queue; ratings are out of scope, while compact/mini modes follow the main interface.
