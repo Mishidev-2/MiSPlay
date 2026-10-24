@@ -34,8 +34,16 @@ public final class PlaybackQueue {
         if (currentIndex < 0) return;
         long currentId = current().id();
         if (enabled) {
+            // Preserve already-played occurrences and the current song. Only the
+            // upcoming portion is randomized; repeated toggles must not rely on
+            // a shuffle that can randomly reproduce the identical order.
             List<Entry> order = new ArrayList<>(tracks);
-            Collections.shuffle(order.subList(currentIndex + 1, order.size()));
+            List<Entry> upcoming = order.subList(currentIndex + 1, order.size());
+            if (upcoming.size() > 1) {
+                List<Entry> previousOrder = List.copyOf(upcoming);
+                Collections.shuffle(upcoming);
+                if (upcoming.equals(previousOrder)) Collections.rotate(upcoming, 1);
+            }
             tracks = List.copyOf(order);
         } else {
             tracks = originalTracks;

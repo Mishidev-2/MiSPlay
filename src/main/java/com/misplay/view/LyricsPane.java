@@ -12,6 +12,7 @@ import javafx.beans.value.ChangeListener;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.text.TextAlignment;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
@@ -103,6 +104,8 @@ public final class LyricsPane extends VBox implements AutoCloseable {
             private final Label text = new Label();
             {
                 text.setWrapText(true);
+                text.setAlignment(Pos.CENTER);
+                text.setTextAlignment(TextAlignment.CENTER);
                 text.maxWidthProperty().bind(widthProperty().subtract(28));
                 text.prefWidthProperty().bind(text.maxWidthProperty());
                 text.textFillProperty().bind(textFillProperty());
@@ -148,6 +151,8 @@ public final class LyricsPane extends VBox implements AutoCloseable {
             private final Label text = new Label();
             {
                 text.setWrapText(true);
+                text.setAlignment(Pos.CENTER);
+                text.setTextAlignment(TextAlignment.CENTER);
                 text.maxWidthProperty().bind(widthProperty().subtract(28));
                 text.prefWidthProperty().bind(text.maxWidthProperty());
                 text.textFillProperty().bind(textFillProperty());

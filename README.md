@@ -2,7 +2,15 @@
 
 A personal Windows 11 desktop music player built with Java 25 and JavaFX. The project is developed in small increments, with an emphasis on understandable Java OOP, responsive controls and measured resource use.
 
-**Status:** MP3 prototype with explicit embedded-cover refresh, editable session queue, song/queue context menus and searchable album/artist browsing within All songs, Favorites and playlists, Added order and Title/Artist/Album sorting, independent saved playlist orders, expanded cached metadata, sidecar/embedded lyrics and export, saved library/preferences, folder importing and artwork. All 24 production sources compile with Java 25/JavaFX 25.0.2 on Linux; the cover-refresh checkpoint passed 7 focused service and 2 new application checks plus 332 earlier queue/browsing/sorting regressions (341 total). Schema 7 and metadata-cache format 2 are unchanged. Windows Maven, real audio/synchronization and native-dialog checks remain local work. The supplied prototype’s visual design and Windows packaging remain upcoming work.
+**Status:** Phase 1B navigation checkpoint (pending Windows verification), MP3 prototype with explicit embedded-cover refresh, editable session queue, song/queue context menus and searchable album/artist browsing within All songs, Favorites and playlists, Added order and Title/Artist/Album sorting, independent saved playlist orders, expanded cached metadata, sidecar/embedded lyrics and export, saved library/preferences, folder importing and artwork. The pre-UI 24-source checkpoint compiled with Java 25/JavaFX 25.0.2 on Linux; the cover-refresh checkpoint passed 7 focused service and 2 new application checks plus 332 earlier queue/browsing/sorting regressions (341 total). Schema 7 and metadata-cache format 2 are unchanged. Windows Maven, real audio/synchronization and native-dialog checks remain local work. The visual overhaul is in progress (navigation and sidebar so far); the full Figma screens and Windows packaging remain future work.
+
+## Phase 1B UI navigation checkpoint (Windows verification pending)
+
+- The app now has prototype-inspired **Library / Albums / Artists / Playlists** navigation and a top-level search field. The header also exposes **Create Playlist**, alongside the existing import actions.
+- **Library** displays the current virtualized song browser and provides a Play all button. **Albums / Artists** route to existing browsable groups (not yet the final Figma artwork grid and detail layouts). Library search and sort state remain bound to the existing service and browser.
+- **Playlists** opens a collection view showing saved playlists and their song counts. Double-click a playlist or press Enter to open its existing editor; use **← All playlists** to return. An empty collection has a Create Playlist action. The original View dropdown remains available in the editor during this incremental migration.
+- The Now Playing sidebar, Lyrics/Queue switch, shuffle/queue fix, metadata/artwork, playback and database are unchanged. Queue state remains session-only; no ratings, mini-player or compact-player implementation has been added.
+- **Build and UI verification:** JavaFX 25/JDK 25/Maven are not available in the authoring environment. Run IntelliJ Maven `package` and the Phase 1B M390–M402 checks in `docs/DEVELOPMENT.md` before committing.
 
 ## Current features
 
@@ -15,11 +23,11 @@ A personal Windows 11 desktop music player built with Java 25 and JavaFX. The pr
 - Seek by dragging, clicking the slider track or using keyboard controls, including while paused or after completion.
 - Navigate with Previous and Next through a queue captured from the visible All songs, Favorites or manual-playlist results.
 - Advance automatically, with Repeat Off, Repeat All and Repeat One modes.
-- Shuffle with consistent Previous/Next navigation and restoration of the captured order when shuffle is disabled.
+- Shuffle with consistent Previous/Next navigation and restoration of the captured order when shuffle is disabled. Repeated on/off cycles preserve the current song; if two or more songs remain after it, each enable changes their order. With zero or one upcoming songs there is nothing to randomize.
 - Save volume, repeat mode and the shuffle switch, then restore them at startup while playback waits for a song selection.
 - Combine rapid control changes into a save after about 250 ms and capture the latest values on normal close.
 - Preserve the active queue during sorting, searches, imports, view changes, favorite edits and playlist edits/deletion.
-- Stage songs through the song context menu with **Play next** or **Add to queue**; inspect the session queue in the Queue tab. Repeated songs are separate entries.
+- Stage songs through the song context menu with **Play next** or **Add to queue**; inspect the session queue via the Queue switch in the right sidebar. Repeated songs are separate entries. The current occurrence has a persistent green/arrow marker even after shuffle toggles or switching to Lyrics and back.
 - Start an entry with double-click/Enter, remove a nonplaying entry, move upcoming entries, or clear upcoming entries without interrupting the current song.
 - Display playback errors and dispose of the previous audio player when switching files or closing the application.
 
@@ -76,7 +84,7 @@ The earlier reader’s `getFirst(ARTIST)` discarded later stored artist values. 
 ### Lyrics
 
 - Load a same-basename `.lrc` file beside the playing MP3 on every playback request, including Previous/Next, automatic advancement and repeat.
-- Browse a separate Lyrics tab while the now-playing information and playback controls stay available below it.
+- Use the right-sidebar Lyrics/Queue toggle below the artwork and metadata; playback controls stay available in the bottom transport area.
 - Follow the audio clock with an accented current row and automatic scrolling on line changes. Backward seeks and timed blank lines update the highlight too.
 - Click a timed row, or select it and press Enter, to seek when audio duration is available. Selecting a row alone leaves playback unchanged.
 - Use Reload lyrics to read a file added or edited during playback without restarting the song.
@@ -205,9 +213,9 @@ After changing the embedded cover in an MP3, choose **Reload cover** while that 
 
 Right-click a song in the library to **Play**, **Play next**, **Add to queue**, **Add to playlist...**, **Favorite**, **Unfavorite** or **Remove from playlist**. Ctrl/Shift selection applies bulk actions to the selected songs in their currently displayed order. Right-clicking an unselected row selects that row first. Play captures the whole displayed and filtered song view as a new queue; it replaces prior queue edits. Play next inserts selected songs immediately after the current entry, preserving their selection order. Add to queue appends them, including repetitions. With no active song, Add to queue stages songs without autoplay; Play next starts the first selected song.
 
-Open the **Queue** tab to see the actual play order. Double-click a row or select it and press Enter to play that exact occurrence. The Queue tab's buttons and right-click menu remove one nonplaying entry, move an upcoming entry earlier/later, or clear upcoming entries. The currently playing occurrence cannot be removed or moved. Clearing upcoming keeps history and current playback; with an idle staged queue it clears all staged entries. Previous/Next and completion use the edited order, including Repeat and Shuffle. Turning Shuffle off restores the base order, including new entries; moving an upcoming entry commits the displayed order as the new base. Metadata changes update queue row text. Queue membership, edits and position remain session-only; saved Repeat/Shuffle preferences still restore.
+Select **Queue** in the right sidebar to see the actual play order. Double-click a row or select it and press Enter to play that exact occurrence. The Queue sidebar's buttons and right-click menu remove one nonplaying entry, move an upcoming entry earlier/later, or clear upcoming entries. The currently playing occurrence cannot be removed or moved. Clearing upcoming keeps history and current playback; with an idle staged queue it clears all staged entries. Previous/Next and completion use the edited order, including Repeat and Shuffle. Turning Shuffle off restores the base order, including new entries; moving an upcoming entry commits the displayed order as the new base. Metadata changes update queue row text. Queue membership, edits and position remain session-only; saved Repeat/Shuffle preferences still restore.
 
-The Queue tab is a functional interim view. The planned visual redesign will put Queue and centred Lyrics in a shared right sidebar.
+The existing functional Queue and Lyrics panes now share the right sidebar, below artwork and current-track metadata. Switching views does not rebuild them or modify the queue.
 
 ## Using lyrics
 
@@ -254,7 +262,7 @@ Lyric problems do not stop playback. Reads/reloads do not rewrite audio, create 
 
 ### Exporting lyrics
 
-1. Load the song’s lyrics, then click **Export lyrics** in the Lyrics tab. The button is disabled before usable lyrics arrive, during a read and while an export is saving.
+1. Load the song’s lyrics, then click **Export lyrics** in the right-sidebar Lyrics view. The button is disabled before usable lyrics arrive, during a read and while an export is saving.
 2. Save As suggests the playing MP3’s basename with `.lrc` for synchronized rows or `.txt` for plain text. A missing extension is appended; an incompatible extension is rejected. Choose a destination, or cancel to leave files unchanged.
 3. Confirm replacement if the resolved lyric filename already exists. Windows may also ask through its native Save As dialog. Declining either confirmation leaves the old file intact.
 4. Read the result message below the lyrics; hover it for the complete message if a long filename is shortened. After a write error, choose a writable location and export again.
@@ -352,7 +360,7 @@ The future Python LRC generator is a separate project. AI models are not part of
 - Library import order, favorite membership, playlist names/membership/manual order/addition sequence, valid text metadata and playback preferences persist; browse mode/group/query/direction, each View/Browse song-sort choice, the active queue, selected library view/tab/song, playback position, shuffled order, artwork cache and loaded lyrics are session-only. A new profile uses 50% / Repeat OFF / Shuffle OFF; saved choices override those defaults.
 - Playlists contain each path once and support manual single-song moves. Playlist import/export, drag ordering and library removal are not implemented. Saves replace a complete playlist snapshot per batch; large-playlist performance has not been profiled.
 - Favorites Added order follows main-library import order, not favorite-marking time; text sorting is available but manual reordering is not. Accepted save batches replace its complete membership snapshot; large-favorites performance has not been profiled.
-- The queue supports repeated file occurrences and entry-level actions, but it does not save queue history or support drag-and-drop. Its current view is a separate functional tab until the shared sidebar is built.
+- The queue supports repeated file occurrences and entry-level actions, but it does not save queue history or support drag-and-drop. Its current view is the switchable right sidebar; queue remains session-only.
 - Browse controls and song-sort choices reset after restart. Album grouping uses names and ordered credits, without release IDs/folder heuristics; Artists uses track artists rather than album-artist-only credits. Artwork grids, artist album subpages and group-wide context menus are future UI work.
 - Upgraded playlists begin their addition sequence from the saved order available at migration; previously unrecorded addition history cannot be recovered. Language-specific collation and natural-number text sorting are not implemented.
 - Moved/deleted paths remain in the library. Background metadata validation detects unavailable files, but paths are not repaired automatically.
@@ -377,4 +385,10 @@ JavaFX dependencies and launcher configuration follow the [OpenJFX Maven guide](
 
 ## Windows performance baseline (Phase 0)
 
-Before the visual overhaul, run the read-only `tools/Measure-MiSPlay.ps1` sampler on Windows 11 and record each workload using [docs/PERFORMANCE_BASELINE.md](docs/PERFORMANCE_BASELINE.md). The baseline has **not yet been measured**; this adds instructions and a sampler, not benchmark results. The agreed UI layout keeps artwork and metadata at the top of the right sidebar and switches its lower area between Lyrics and Queue; ratings are out of scope, while compact/mini modes follow the main interface.
+Before the visual overhaul, run the read-only `tools/Measure-MiSPlay.ps1` sampler on Windows 11 and record each workload using [docs/PERFORMANCE_BASELINE.md](docs/PERFORMANCE_BASELINE.md). The user completed five pre-UI baseline scenarios on 2026-10-24; see [recorded aggregates](docs/PERFORMANCE_RESULTS_2026-10-24.md). Raw CSVs remain in the local `baseline/` folder. The agreed UI layout keeps artwork and metadata at the top of the right sidebar and switches its lower area between Lyrics and Queue; ratings are out of scope, while compact/mini modes follow the main interface.
+
+## Phase 1 UI shell checkpoint
+
+The UI now uses `view/PlayerShell.java` and `src/main/resources/com/misplay/player.css`. The main workspace contains the existing `LibraryBrowser`; the fixed right sidebar shows current artwork/title/metadata and switches **Lyrics**/**Queue** without recreating either pane. The bottom transport retains play/pause/previous/next, seek, volume, shuffle, repeat, cover reload and error/status controls. `MiSPlayApp` continues to own application and service bindings, menu actions, and playback state; `PlayerShell` owns only layout/toggle visibility. The centered lyric presentation uses the existing synchronized/plain lyric data.
+
+This is the **first shell increment**, not a pixel-complete Figma implementation: full Library/Albums/Artists/Playlists top-level navigation, artwork grids/detail pages, accent color picker/persistence, compact/mini player and final layout polish remain pending. Nothing about the audio service, queue ordering, database schema or import paths changes in this checkpoint. Install and verify it using [Phase 1 instructions](docs/DEVELOPMENT.md#phase-1a-windows-checkpoint--shell-and-sidebar).

@@ -10,6 +10,9 @@ import com.misplay.model.RepeatMode;
 import com.misplay.service.LibraryService;
 import com.misplay.service.LyricsService;
 import com.misplay.view.LyricsPane;
+import com.misplay.view.PlayerShell;
+import com.misplay.view.MainNavigation;
+import com.misplay.view.PlaylistsOverview;
 import com.misplay.model.TrackMetadata;
 import com.misplay.model.Track;
 import com.misplay.model.TrackSort;
@@ -48,8 +51,6 @@ import javafx.scene.control.ComboBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.SelectionMode;
 import javafx.scene.control.Tooltip;
-import javafx.scene.control.Tab;
-import javafx.scene.control.TabPane;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.MenuItem;
 
@@ -238,9 +239,18 @@ public class MiSPlayApp extends Application {
         Button reloadCoverButton = new Button("Reload cover");
         reloadCoverButton.setId("reload-cover");
         Runnable refreshQueue = () -> {
-            queueList.getItems().setAll(playbackQueue.entries());
+            List<Entry> order = playbackQueue.entries();
             Entry current = playbackQueue.current();
-            queueList.getSelectionModel().select(current);
+            queueList.getItems().setAll(order);
+
+            // A virtualized ListView may reuse a cell containing the same Entry
+            // after a shuffle/restore, including while the sidebar is hidden.
+            // Select by occurrence position and force cells to recompute the
+            // playing marker, even when the row's item identity did not change.
+            int playingIndex = current == null ? -1 : order.indexOf(current);
+            queueList.getSelectionModel().clearSelection();
+            if (playingIndex >= 0) queueList.getSelectionModel().select(playingIndex);
+            queueList.refresh();
         };
 
         Runnable updateQueueButtons = () -> {
@@ -835,8 +845,10 @@ public class MiSPlayApp extends Application {
             });
         });
 
+        Button backToPlaylists = new Button("← All playlists");
+        backToPlaylists.setId("back-to-playlists");
         HBox libraryViewControls = new HBox(
-                8, new Label("View"), playlistChooser,
+                8, backToPlaylists, new Label("View"), playlistChooser,
                 newPlaylistButton, renamePlaylistButton, deletePlaylistButton
         );
         libraryViewControls.setAlignment(Pos.CENTER_LEFT);
@@ -1009,10 +1021,13 @@ public class MiSPlayApp extends Application {
         );
         playlistSongControls.setAlignment(Pos.CENTER_LEFT);
 
+        javafx.css.PseudoClass playingClass = javafx.css.PseudoClass.getPseudoClass("playing");
         queueList.setCellFactory(view -> {
             ListCell<Entry> cell = new ListCell<>() {
                 @Override protected void updateItem(Entry entry, boolean empty) {
                     super.updateItem(entry, empty);
+                    boolean playing = !empty && entry != null && entry.equals(playbackQueue.current());
+                    pseudoClassStateChanged(playingClass, playing);
                     if (empty || entry == null) {
                         setText(null);
                         setTooltip(null);
@@ -1021,8 +1036,7 @@ public class MiSPlayApp extends Application {
                     Track track = libraryService.getTrack(entry.file());
                     String title = track.getMetadata().title();
                     String detail = track.getMetadata().details();
-                    String label = (entry.equals(playbackQueue.current()) ? "▶ " : "")
-                            + title + "\n" + detail;
+                    String label = (playing ? "▶ " : "") + title + "\n" + detail;
                     setText(label);
                     setTooltip(new Tooltip(label));
                 }
@@ -1129,6 +1143,11 @@ public class MiSPlayApp extends Application {
         VBox queuePane = new VBox(8, queueList, queueActions);
         queuePane.setPadding(new Insets(10, 0, 0, 0));
         VBox.setVgrow(queueList, Priority.ALWAYS);
+        // Cells can be recycled while hidden. Refresh when the Queue tab
+        // returns, without clearing a user's explicit queue selection.
+        queuePane.visibleProperty().addListener((obs, wasVisible, isVisible) -> {
+            if (isVisible) queueList.refresh();
+        });
         updateQueueActions.run();
 
         playButton.setOnAction(event -> audioService.play());
@@ -1196,19 +1215,6 @@ public class MiSPlayApp extends Application {
         );
         volumeControls.setAlignment(Pos.CENTER);
 
-        HBox controls = new HBox(
-                10,
-                openButton,
-                addButton,
-                addFolderButton,
-                previousButton,
-                playButton,
-                pauseButton,
-                nextButton
-        );
-
-        controls.setAlignment(Pos.CENTER);
-
         HBox playbackOptions = new HBox(
                 10,
                 repeatButton,
@@ -1249,55 +1255,176 @@ public class MiSPlayApp extends Application {
                         + "-fx-border-radius: 6;"
         );
 
-        VBox nowPlayingText = new VBox(6, trackLabel, metadataLabel);
-        nowPlayingText.setAlignment(Pos.CENTER_LEFT);
-        nowPlayingText.setMinWidth(0);
-        HBox.setHgrow(nowPlayingText, Priority.ALWAYS);
-
-        HBox nowPlayingRow = new HBox(16, coverPane, nowPlayingText);
-        nowPlayingRow.setAlignment(Pos.CENTER_LEFT);
+        // Phase 1B: Figma navigation wraps the existing virtualized browser.
+        // Route changes update the existing mode/view selectors rather than
+        // reimplementing filtering, ordering, or captured playback queues.
+        MainNavigation navigation = new MainNavigation(searchField);
+        Label workspaceTitle = new Label("Your library");
+        workspaceTitle.getStyleClass().add("workspace-title");
+        Label librarySummary = new Label();
+        librarySummary.getStyleClass().add("workspace-subtitle");
+        workspaceTitle.textProperty().bind(Bindings.createStringBinding(() -> {
+            return switch (navigation.getSelectedSection()) {
+                case LIBRARY -> "Your library";
+                case ALBUMS -> "Albums";
+                case ARTISTS -> "Artists";
+                case PLAYLISTS -> {
+                    Playlist selected = playlistChooser.getValue();
+                    yield selected == null || selected.id().equals(allSongs.id())
+                            || selected.id().equals(favoritesView.id())
+                            ? "Your playlists" : selected.name();
+                }
+            };
+        }, navigation.selectedSectionProperty(), playlistChooser.valueProperty()));
+        librarySummary.textProperty().bind(Bindings.createStringBinding(() -> {
+            Playlist selected = playlistChooser.getValue();
+            if (navigation.getSelectedSection() == MainNavigation.Section.PLAYLISTS
+                    && selected != null && !selected.id().equals(allSongs.id())
+                    && !selected.id().equals(favoritesView.id())) {
+                return selected.files().size() + " songs in this playlist";
+            }
+            return libraryService.getTracks().size() + " songs stored on this device";
+        }, libraryService.getTracks(), navigation.selectedSectionProperty(),
+                playlistChooser.valueProperty()));
+        VBox libraryHeadingText = new VBox(5, workspaceTitle, librarySummary);
+        Button playVisibleButton = new Button("Play all");
+        playVisibleButton.setId("play-visible");
+        playVisibleButton.getStyleClass().add("action-primary");
+        playVisibleButton.disableProperty().bind(Bindings.isEmpty(visibleTracks).or(
+                libraryService.restoringLibraryProperty()));
+        playVisibleButton.setOnAction(event -> {
+            if (!visibleTracks.isEmpty()) startQueue.accept(visibleTracks.getFirst());
+        });
+        HBox headingSpacer = new HBox();
+        HBox.setHgrow(headingSpacer, Priority.ALWAYS);
+        HBox workspaceHeading = new HBox(12, libraryHeadingText, headingSpacer, playVisibleButton);
+        workspaceHeading.setAlignment(Pos.CENTER_LEFT);
+        workspaceHeading.getStyleClass().add("workspace-heading");
 
         VBox libraryPane = new VBox(
                 6,
+                workspaceHeading,
                 libraryViewControls,
                 sortControls,
-                searchField,
                 libraryStatusRow,
                 libraryBrowser,
                 playlistSongControls,
                 playlistMessage
         );
+        libraryPane.setId("library-content");
         libraryPane.setPadding(new Insets(10, 0, 0, 0));
         VBox.setVgrow(libraryBrowser, Priority.ALWAYS);
-        TabPane mainTabs = new TabPane(
-                new Tab("Library", libraryPane), new Tab("Queue", queuePane),
-                new Tab("Lyrics", lyricsPane)
+
+        // The playlist collection has its own screen. The original playlist
+        // editor remains intact and is revealed when a saved playlist opens.
+        final PlaylistsOverview[] overviewRef = new PlaylistsOverview[1];
+        Runnable showPlaylistOverview = () -> {
+            navigation.setPlaylistDetailVisible(false);
+            libraryPane.setVisible(false);
+            libraryPane.setManaged(false);
+            overviewRef[0].setVisible(true);
+            overviewRef[0].setManaged(true);
+        };
+        Runnable showLibraryContent = () -> {
+            navigation.setPlaylistDetailVisible(
+                    navigation.getSelectedSection() == MainNavigation.Section.PLAYLISTS);
+            overviewRef[0].setVisible(false);
+            overviewRef[0].setManaged(false);
+            libraryPane.setVisible(true);
+            libraryPane.setManaged(true);
+        };
+        Consumer<Playlist> openSavedPlaylist = playlist -> {
+            // Set SONGS before capturing playlist order in the existing browser.
+            libraryBrowser.getModeChooser().setValue(Mode.SONGS);
+            playlistChooser.setValue(playlist);
+            navigation.select(MainNavigation.Section.PLAYLISTS);
+            showLibraryContent.run();
+        };
+        PlaylistsOverview playlistsOverview = new PlaylistsOverview(
+                libraryService.getPlaylists(), openSavedPlaylist, newPlaylistButton::fire);
+        overviewRef[0] = playlistsOverview;
+        playlistsOverview.setVisible(false);
+        playlistsOverview.setManaged(false);
+        StackPane libraryWorkspace = new StackPane(libraryPane, playlistsOverview);
+        libraryWorkspace.setId("library-workspace-stack");
+        libraryWorkspace.setMinSize(0, 0);
+        navigation.selectedSectionProperty().addListener((observable, oldSection, section) -> {
+            switch (section) {
+                case LIBRARY -> {
+                    showLibraryContent.run();
+                    playlistChooser.setValue(allSongs);
+                    libraryBrowser.getModeChooser().setValue(Mode.SONGS);
+                }
+                case ALBUMS -> {
+                    showLibraryContent.run();
+                    playlistChooser.setValue(allSongs);
+                    libraryBrowser.getModeChooser().setValue(Mode.ALBUMS);
+                }
+                case ARTISTS -> {
+                    showLibraryContent.run();
+                    playlistChooser.setValue(allSongs);
+                    libraryBrowser.getModeChooser().setValue(Mode.ARTISTS);
+                }
+                case PLAYLISTS -> showPlaylistOverview.run();
+            }
+        });
+        // The legacy dropdown is deliberately retained during the migration.
+        // Creating/choosing a manual playlist opens its editor, not the overview.
+        playlistChooser.valueProperty().addListener((observable, oldValue, selected) -> {
+            if (selected == null) return;
+            boolean manual = !selected.id().equals(allSongs.id())
+                    && !selected.id().equals(favoritesView.id());
+            if (manual) {
+                if (navigation.getSelectedSection() != MainNavigation.Section.PLAYLISTS) {
+                    navigation.select(MainNavigation.Section.PLAYLISTS);
+                }
+                showLibraryContent.run();
+            } else if (navigation.getSelectedSection() == MainNavigation.Section.PLAYLISTS
+                    && libraryPane.isVisible()) {
+                navigation.select(MainNavigation.Section.LIBRARY);
+            }
+        });
+        backToPlaylists.visibleProperty().bind(Bindings.createBooleanBinding(
+                () -> navigation.getSelectedSection() == MainNavigation.Section.PLAYLISTS
+                        && libraryPane.isVisible(),
+                navigation.selectedSectionProperty(), libraryPane.visibleProperty()));
+        backToPlaylists.managedProperty().bind(backToPlaylists.visibleProperty());
+        backToPlaylists.setOnAction(event -> showPlaylistOverview.run());
+        playVisibleButton.textProperty().bind(Bindings.createStringBinding(
+                () -> navigation.getSelectedSection() == MainNavigation.Section.LIBRARY
+                        ? "Play all" : "Play visible",
+                navigation.selectedSectionProperty()));
+
+        // Keep the Phase 1A shell and all its existing now-playing behavior.
+        Button headerCreatePlaylist = new Button("Create Playlist");
+        headerCreatePlaylist.setId("header-create-playlist");
+        headerCreatePlaylist.setOnAction(event -> newPlaylistButton.fire());
+        headerCreatePlaylist.disableProperty().bind(newPlaylistButton.disableProperty());
+        HBox importToolbar = new HBox(8, headerCreatePlaylist, addButton, addFolderButton, openButton);
+        importToolbar.setAlignment(Pos.CENTER_RIGHT);
+        HBox transportControls = new HBox(10,
+                previousButton, playButton, pauseButton, nextButton);
+        transportControls.setAlignment(Pos.CENTER);
+        HBox playbackRow = new HBox(16, transportControls, playbackOptions,
+                volumeControls);
+        playbackRow.setAlignment(Pos.CENTER_LEFT);
+        HBox playbackTimeline = new HBox(10, timeLabel, seekSlider);
+        playbackTimeline.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(seekSlider, Priority.ALWAYS);
+        VBox transport = new VBox(8, playbackRow, playbackTimeline);
+        VBox messages = new VBox(5, folderStatusRow, errorLabel);
+
+        PlayerShell root = new PlayerShell(libraryWorkspace, queuePane, lyricsPane,
+                coverPane, trackLabel, metadataLabel,
+                importToolbar, navigation, transport, messages);
+        Scene scene = new Scene(root, 1380, 900);
+        scene.getStylesheets().add(
+                MiSPlayApp.class.getResource("/com/misplay/player.css").toExternalForm()
         );
-        mainTabs.setId("main-tabs");
-        mainTabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
-        mainTabs.setMinHeight(280);
-
-        VBox root = new VBox(
-                8,
-                mainTabs,
-                nowPlayingRow,
-                timeLabel,
-                seekSlider,
-                controls,
-                folderStatusRow,
-                playbackOptions,
-                volumeControls,
-                errorLabel
-        );
-
-        VBox.setVgrow(mainTabs, Priority.ALWAYS);
-        root.setAlignment(Pos.CENTER);
-        root.setPadding(new Insets(20));
-
         stage.setTitle("MiSPlay");
-        stage.setScene(new Scene(root, 820, 780));
-        stage.setMinWidth(760);
-        stage.setMinHeight(720);
+        stage.setScene(scene);
+        stage.setMinWidth(1140);
+        stage.setMinHeight(730);
         stage.show();
         libraryService.restoreLibrary();
     }

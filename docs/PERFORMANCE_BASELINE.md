@@ -82,3 +82,7 @@ Record machine CPU model, total RAM, JDK full version, display scale/window size
 - Windows audio, saved library, queue and lyrics regressions checked.
 - CSVs and workload notes captured across baseline scenarios (or missing workloads explicitly recorded).
 - Findings compared with the Figma and code architecture before modifying the UI.
+
+## Recorded 2026-10-24 baseline
+
+The user's five 60-second aggregate results and heap diagnostics are preserved in [PERFORMANCE_RESULTS_2026-10-24.md](PERFORMANCE_RESULTS_2026-10-24.md). Raw CSV samples remain on the Windows machine; the aggregates are not a substitute for the underlying per-sample files. Repeat comparable workloads after the UI shell change.

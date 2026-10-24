@@ -4,9 +4,30 @@ Completed changes are recorded here. Planned work belongs in the README or devel
 
 ## Unreleased
 
+### Phase 1B — navigation and playlist collection (awaiting Windows checks)
+
+- Added reusable `MainNavigation` for the four prototype sections and moved the existing search field into the navigation bar.
+- Added `PlaylistsOverview` with a live saved-playlist list, song counts, empty state, double-click/Enter opening and Create Playlist action.
+- Routed Library, Albums and Artists to existing view/browse logic; Playlists opens the existing editor without rebuilding its audio/queue state. Added an explicit back-to-collection action.
+- Added library heading/song count and Play all/Play visible actions, plus prototype-inspired CSS. Added Create Playlist to the header.
+- No ratings or compact/mini modes; no database/schema/metadata-cache changes. Album/artist cover grids and full Figma fidelity remain future work.
+
+### Fixed
+
+- Phase 1A follow-up: resynchronize the queue selection and virtualized row styling after shuffle toggles and when returning from Lyrics. A playing-row marker is now independent of the user's action selection, so the current song remains identifiable.
+- Ensure enabling Shuffle changes the upcoming order whenever at least two entries remain, instead of occasionally recreating the same order by chance. Keep already-played history/current entry intact; with zero or one upcoming entry the order necessarily stays the same.
+
 ### Added
 
-- Phase 0 Windows performance baseline instructions and a read-only process sampler (`tools/Measure-MiSPlay.ps1`); no baseline results claimed.
+- Standalone `tools/CheckPlaybackQueue.java` regression program covering repeated on/off toggles, exact-occurrence preservation and original-order restoration (1,042 checks executed against the production queue model with Java 21 in the temporary Linux workspace; UI not verified here).
+
+- Phase 1A `PlayerShell` view component and starter JavaFX CSS: shared app header, resizable library workspace, artwork/title/metadata sidebar with persistent Lyrics/Queue toggle, and bottom playback/volume/status region.
+- Center alignment of timed and plain lyric rows inside their existing virtualized panes.
+- User-reported Windows pre-UI CPU/memory aggregates in `docs/PERFORMANCE_RESULTS_2026-10-24.md`, with explicit-collection caveats and comparison guidance.
+- Corrected the PowerShell sampler's `${Scenario}:` interpolation for Windows PowerShell.
+
+
+- Phase 0 Windows performance baseline instructions and a read-only process sampler (`tools/Measure-MiSPlay.ps1`); measurements were later recorded by the user on Windows (see results guide).
 - Documented UI decisions: right Now Playing sidebar with fixed artwork/metadata above switchable Lyrics/Queue, album-wide favorite toggle, no ratings, and compact/mini later.
 
 - Reload cover for the current MP3: explicit cache invalidation reads an edited, removed or newly added embedded image without restarting playback.

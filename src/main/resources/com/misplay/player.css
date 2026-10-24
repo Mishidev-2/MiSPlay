@@ -1,0 +1,107 @@
+/* Phase 1 shell: shared colors and structural styling, not final Figma fidelity.
+   Keep track cover aspect ratio and all controls keyboard-accessible. */
+.player-shell {
+    -fx-background-color: #111411;
+    -fx-base: #24282a;
+    -fx-control-inner-background: #1b2021;
+    -fx-accent: #c8f56a;
+    -fx-selection-bar: #c8f56a;
+    -fx-selection-bar-text: #111411;
+    -fx-text-fill: #f1f3ef;
+    -fx-font-family: "Segoe UI";
+    -fx-font-size: 12px;
+    -fx-padding: 14px;
+}
+.player-shell .label { -fx-text-fill: #f1f3ef; }
+.player-shell .button, .player-shell .toggle-button {
+    -fx-background-color: #24282a;
+    -fx-text-fill: #f1f3ef;
+    -fx-background-radius: 5;
+    -fx-border-radius: 5;
+    -fx-border-color: #303638;
+    -fx-padding: 7 10 7 10;
+}
+.player-shell .button:hover, .player-shell .toggle-button:hover {
+    -fx-background-color: #343b3c;
+}
+.player-shell .button:disabled, .player-shell .toggle-button:disabled { -fx-opacity: 0.5; }
+.player-shell .button:focused, .player-shell .toggle-button:focused {
+    -fx-border-color: #c8f56a;
+}
+.app-header {
+    -fx-alignment: center-left;
+    -fx-spacing: 16;
+    -fx-padding: 4 0 10 0;
+    -fx-border-color: transparent transparent #303638 transparent;
+}
+.app-title { -fx-font-size: 21px; -fx-font-weight: bold; }
+.library-workspace { -fx-padding: 12; -fx-background-color: #1b2021; -fx-background-radius: 8; }
+.playback-sidebar { -fx-padding: 12; -fx-background-color: #1b2021; -fx-background-radius: 8; }
+.sidebar-artwork { -fx-padding: 8; }
+.sidebar-track-info { -fx-padding: 4 0 8 0; }
+#now-playing-title { -fx-font-size: 15px; -fx-font-weight: bold; }
+#now-playing-metadata { -fx-text-fill: #9ba3a2; }
+.sidebar-mode { -fx-font-weight: bold; }
+.sidebar-mode:selected { -fx-background-color: #c8f56a; -fx-text-fill: #111411; -fx-border-color: #c8f56a; }
+.sidebar-content { -fx-background-color: #161a1a; -fx-background-radius: 6; -fx-padding: 6; }
+.player-footer {
+    -fx-padding: 12 4 2 4;
+    -fx-border-color: #303638 transparent transparent transparent;
+}
+.player-shell .list-view, .player-shell .text-field, .player-shell .combo-box-base {
+    -fx-background-color: #24282a;
+    -fx-text-fill: #f1f3ef;
+    -fx-border-color: #303638;
+}
+.player-shell .list-cell { -fx-background-color: #1b2021; -fx-text-fill: #f1f3ef; }
+.player-shell .list-cell:filled:hover { -fx-background-color: #303638; }
+.player-shell .list-cell:filled:selected { -fx-background-color: #354b2b; -fx-text-fill: #f1f3ef; }
+.player-shell .list-cell:filled:selected .label { -fx-text-fill: #f1f3ef; }
+
+/* Playing is independent of mouse selection and survives Lyrics/Queue switching. */
+.player-shell #queue-list .list-cell:filled:playing {
+    -fx-background-color: #304c37;
+    -fx-border-color: #c8f56a;
+    -fx-border-width: 0 0 0 3;
+}
+.player-shell #queue-list .list-cell:filled:playing:selected {
+    -fx-background-color: #354b2b;
+}
+
+
+/* Phase 1B: Figma-inspired top-level navigation and playlist collection. */
+.main-navigation {
+    -fx-padding: 10 4 10 4;
+    -fx-border-color: transparent transparent #303638 transparent;
+}
+.player-shell .navigation-tab {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-padding: 9 15 9 15;
+    -fx-font-size: 13px;
+}
+.player-shell .navigation-tab:hover { -fx-background-color: #24282a; }
+.player-shell .navigation-tab:active {
+    -fx-text-fill: #c8f56a;
+    -fx-border-color: transparent transparent #c8f56a transparent;
+    -fx-border-width: 0 0 2 0;
+    -fx-opacity: 1;
+}
+.navigation-search { -fx-pref-height: 34px; }
+.workspace-heading { -fx-padding: 10 0 16 0; }
+.workspace-title { -fx-font-size: 23px; -fx-font-weight: bold; }
+.player-shell .workspace-subtitle { -fx-text-fill: #9ba3a2; -fx-font-size: 12px; }
+.player-shell .action-primary {
+    -fx-background-color: #c8f56a;
+    -fx-text-fill: #111411;
+    -fx-border-color: #c8f56a;
+    -fx-font-weight: bold;
+}
+.player-shell .action-primary:hover { -fx-background-color: #d8ff88; }
+.playlists-overview { -fx-padding: 10 3 0 3; }
+.player-shell .playlist-overview-name { -fx-font-size: 14px; -fx-font-weight: bold; }
+.player-shell #playlist-overview-list .list-cell:filled { -fx-background-color: #1b2021; }
+.player-shell #playlist-overview-list .list-cell:filled:hover { -fx-background-color: #303638; }
+.player-shell #playlist-overview-list .list-cell:filled:selected { -fx-background-color: #354b2b; }

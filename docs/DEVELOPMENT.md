@@ -45,7 +45,7 @@ The repository also has a private `ArtistRows` read helper for ordered artist ma
 
 `addNext` inserts ordered occurrences after the current entry in both active and base orders; `addToEnd` appends. An idle Add to queue stages entries without playback. An idle Play next starts the selected files with the first selected file playing. Activating an idle staged entry with Shuffle ON shuffles only the other occurrences before playback. `remove` rejects the current occurrence but can remove history or upcoming entries by ID; `clearUpcoming` retains history/current or empties an idle queue. `moveUpcoming` only crosses upcoming entries and commits the displayed order as the new base; disabling Shuffle then restores that edited base. Switching Shuffle without a move locates the current occurrence by ID, not its file path. Previous/Next, completion, Repeat ONE/ALL and single-song behavior use the edited active order. Audio is replaced only when an entry is explicitly activated or navigation advances; queue editing does not reload the current file. All queue state remains session-only and makes no database writes/schema changes. Playback preferences still save only volume/repeat/shuffle.
 
-`MiSPlayApp` owns the interim Queue tab and context menus. A library row's secondary click selects that row when it was not already in the multi-selection. Menu bulk actions read selected rows in visible order, then call the existing playlist/Favorites controls or queue operations. Queue row secondary click selects the occurrence; Enter/double-click activates it. Action buttons/menus disable invalid moves/removal; model guards also reject them. The virtualized queue rows use cached Track metadata and refresh on metadata updates, without tag or image decoding in the cell. A later UI checkpoint will move Queue/Lyrics into the shared right sidebar.
+`MiSPlayApp` owns the queue/context-menu event wiring; `PlayerShell` now hosts the queue in the right sidebar. The queue list keeps its original entry-occurrence IDs, selects the current entry by occurrence index, explicitly refreshes the virtualized cells after queue changes, and refreshes row cells on showing Queue after Lyrics without disturbing the selected action row. Cells set a `playing` pseudo-class independent of click selection; the stylesheet gives that row a green marker. This corrects stale current-row indication after repeated shuffle toggles and hidden-pane changes. A library row's secondary click selects that row when it was not already in the multi-selection. Menu bulk actions read selected rows in visible order, then call the existing playlist/Favorites controls or queue operations. Queue row secondary click selects the occurrence; Enter/double-click activates it. Action buttons/menus disable invalid moves/removal; model guards also reject them. The virtualized queue rows use cached Track metadata and refresh on metadata updates, without tag or image decoding in the cell. Phase 1A places the existing Queue/Lyrics nodes into the shared right sidebar without reinitializing either node.
 
 ### Startup and saved library
 
@@ -193,7 +193,7 @@ Without a valid saved choice, shuffle defaults to OFF. Its switch is restored at
 
 `originalTracks` stores the file order captured when the queue starts. `tracks` stores the active playback order. Both lists contain file references rather than loaded audio.
 
-Enabling shuffle during an existing queue preserves entries up to and including the current position. Only entries after that position are shuffled.
+Enabling shuffle during an existing queue preserves entries up to and including the current position. Only entries after that position are shuffled. If there are at least two upcoming occurrences, the algorithm guarantees the upcoming sequence changes from its previous order (it rotates after an unchanged random result). With zero or one upcoming occurrence, shuffle may be ON but the displayed order must stay unchanged.
 
 Starting a new queue while shuffle is enabled places the selected song first and shuffles all remaining entries.
 
@@ -1031,7 +1031,7 @@ For later checkpoints, update `CHANGELOG.md` when functionality changes. Update 
 - Record local embedded/Musicolet checks M225–M248 and export checks M249–M272, including native dialogs and actual Windows playback. Plain export must never invent timestamps.
 - Run metadata checks M273–M296, including actual Yaezakura tags and Windows playback; generic all-value reading/tooltips do not prove that file-specific issue resolved.
 - Run queue checks M345–M360 and browsing checks M321–M344 on Windows, alongside relevant earlier metadata/lyric/export cases. No date sorting.
-- Use the supplied prototype for the later visual navigation, artwork grids/detail layouts, bottom transport and shared right-side Queue/Lyrics switching; functional album/artist lists now exist. Lyrics should be centre-aligned; plain text remains untimed. Queue/context-menu commands are functional in an interim tab; the shared sidebar belongs to the redesign.
+- Use the supplied prototype for the later visual navigation, artwork grids/detail layouts, bottom transport and shared right-side Queue/Lyrics switching; functional album/artist lists now exist. Lyrics should be centre-aligned; plain text remains untimed. Queue/context-menu commands remain functional in the new switchable sidebar; full Figma navigation and polish are later work.
 - Theme requirements are black/charcoal, light text and grey secondary elements with a saved configurable accent colour; a colour-wheel control is feasible. Ratings are excluded throughout, even where shown in the prototype. Do not add the mockup’s date sort controls.
 - Keep original image aspect ratios. Mini/compact-player examples remain later design references, alongside tray/overlay work.
 - Keep functional layout/usability fixes with their features; perform the main visual redesign after core behavior is stable and performance has been measured, before final Windows packaging.
@@ -1044,7 +1044,7 @@ For later checkpoints, update `CHANGELOG.md` when functionality changes. Update 
 
 ## Profiling
 
-No memory/CPU baseline has been recorded for MiSPlay. Capture separate measurements for an empty window, playback, populated-library browsing, active folder/metadata work and artwork loading. Record the workload, observation interval, JDK build and tool used. Windows process memory includes more than the Java heap; do not compare unlike metrics.
+A user-reported Windows pre-UI baseline is recorded in `docs/PERFORMANCE_RESULTS_2026-10-24.md`. For comparisons, capture separate measurements for an empty window, playback, populated-library browsing, active folder/metadata work and artwork loading. Record the workload, observation interval, JDK build and tool used. Windows process memory includes more than the Java heap; do not compare unlike metrics.
 
 ## Reference documentation
 
@@ -1067,3 +1067,97 @@ The next check is a **Windows 11 JDK 25 baseline**, not a performed measurement.
 UI decision locked: right sidebar retains artwork and current track metadata above a Lyrics/Queue switch; preserve Queue entry IDs/order and existing LyricsPane timing and manual plain-text scrolling. Remove ratings. Favorite Album applies to all album tracks. Full UI first; mini/compact later. Playback queue and position remain session-only.
 
 Suggested documentation/checkpoint commit: `docs: add Windows performance baseline and sidebar decisions`.
+
+## Phase 1A Windows checkpoint — shell and sidebar
+
+**Scope (2026-10-24):** Replaced the single `TabPane` wrapper with the new `com.misplay.view.PlayerShell` (`BorderPane`) and added `src/main/resources/com/misplay/player.css`. Existing `LibraryBrowser`, queue list/actions and `LyricsPane` instances are passed directly to the shell; both sidebar panes remain instantiated even when hidden. The shell's toggle group switches visibility **and managed state** so hidden panes do not consume layout space. Artwork (`ArtworkService` image property), title and metadata keep their original app bindings. Existing audio/queue/lyric services, schema 7, metadata cache 2 and `pom.xml` stay unchanged. `MiSPlayApp` still creates/owns controls and their event wiring; future increments should extract dedicated controllers and add full Figma sections incrementally rather than move service objects into views.
+
+**Intentional difference from finished prototype:** 1380×900 starting window with min 1140×730, basic charcoal CSS and temporary text buttons. Top-level Albums/Artists/Playlists views remain inside `LibraryBrowser` rather than Figma navigation. Accent color is currently a constant, not saved/user-selectable. Bottom controls retain every prior action but are not yet the final Figma compact transport. Small-window and long-title styling still requires Windows visual review.
+
+**Manual tests (perform in IntelliJ IDEA on Windows 11/Temurin 25; enter Maven Lifecycle → package, then Plugins → javafx → javafx:run):**
+
+| Check | Action | Expected |
+| --- | --- | --- |
+| M370 | Build via IntelliJ Maven package, launch via javafx:run | Compile, CSS resource resolves, shell renders without exception |
+| M371 | Start with library restoring, then finish | Saved library/Favorites/playlists appear; controls only enable when allowed |
+| M372 | Switch Lyrics → Queue → Lyrics repeatedly | Same queue order and lyric timing; no audio stop/restart or flicker |
+| M373 | Switch while a timed LRC is playing | Active line continues following when visible again; click/Enter to seek still works |
+| M374 | Display plain untimed lyrics and scroll, then switch away/back | Centered wrapped lines; manual scroll available; no manufactured timestamps |
+| M375 | Import via Open MP3, Add MP3s and Add Folder in header | Queue and library retain old semantics; status and Cancel scan appear as needed |
+| M376 | Use next/previous, play/pause, seeking, volume, shuffle, repeat | Transport and queue navigate as previously; saved preferences persist |
+| M377 | Queue context menu, duplicate entries, move/remove/clear upcoming | Same entry-occurrence semantics and valid disabling as checkpoint M345–M360 |
+| M378 | Favorite and edit playlists, search/sort and browse albums/artists | All legacy actions accessible from LibraryBrowser; saved data unaffected |
+| M379 | Switch songs with different covers; use Reload cover | Correct artwork/metadata; old asynchronous read cannot overwrite new current cover |
+| M380 | Resize from 1380×900 toward min 1140×730; use long metadata/lyrics | No lost buttons, overlaps or unreadable controls; report defects for next polish increment |
+| M381 | Repeat representative Idle/Playback/Browsing/Artwork 60s samplings | Compare like-for-like with pre-UI summary; no ungrounded memory target claims |
+| M382 | Close and relaunch | Favorites/playlists/preferences persist, playback queue remains session-only |
+
+**Environment boundary:** Linux container only has OpenJDK 21 and no Maven/JavaFX dependencies; this checkpoint's Java 25/JavaFX Maven build, rendering and Windows MediaPlayer/native-dialog behavior **have not** been performed here. Do not mark M370–M382 passed before actually checking on Windows. The source/structure/static checks are not a substitute for those tests. Prior tested baseline refers to the pre-UI code, not this patch.
+
+**Commit after local testing:** `refactor(ui): introduce player shell and switchable lyrics queue sidebar`. Include the new shell, stylesheet, replacement `MiSPlayApp`, centered `LyricsPane`, `README.md`, `CHANGELOG.md`, `docs/DEVELOPMENT.md`, baseline results documentation and sampler fix.
+
+
+## Phase 1A follow-up — shuffle and current-row indication
+
+**Source:** User's Windows feedback from the first Phase 1A shell: the first Shuffle ON reordered songs; turning Shuffle OFF restored the base order but lost the visible current-song marker; later Shuffle ON and switching to Lyrics appeared to stop updating the queue.
+
+**Changes:** `MiSPlayApp.refreshQueue` now replaces the active entry snapshot, resets row selection to the current *occurrence index*, and calls `ListView.refresh()` because virtualized cells can reuse the same entry without calling `updateItem` when the current row moves. A `playing` pseudoclass in the queue cell factory and stylesheet maintains a visible marker independent of which row the user selected for context actions. When the Queue section becomes visible after Lyrics, its virtualized cells are refreshed again without replacing the queue or clearing an explicit selection; this does not reconstruct `PlaybackQueue` or restart playback. The queue model additionally prevents a random no-op when shuffling **two or more** upcoming entries; it keeps already-played occurrences and the current track in place, as before. The queue remains session-only and its IDs distinguish duplicate files.
+
+**Regression check:** Standalone `tools/CheckPlaybackQueue.java` exercises 1,042 assertions against the actual `PlaybackQueue` class. Run from the project root with JDK 25 (PowerShell in IntelliJ):
+
+```powershell
+javac -d target/queue-check src/main/java/com/misplay/model/RepeatMode.java src/main/java/com/misplay/model/PlaybackQueue.java tools/CheckPlaybackQueue.java
+java -cp target/queue-check CheckPlaybackQueue
+```
+
+This check compiles/runs the model but **does not verify JavaFX cell virtualization, CSS, or Windows playback**. Java 21 compiled and executed the source model/test successfully in the temporary Linux environment; the target project should still compile with Java 25 through IntelliJ's bundled Maven.
+
+| Check | Windows manual test | Expected |
+| --- | --- | --- |
+| M383 | Begin from a library song with at least five upcoming entries; open Queue | Current song has a visible green marker/arrow; selected occurrence matches playback |
+| M384 | Enable Shuffle, disable it, repeat five times in Queue | Shuffle ON changes upcoming order; OFF restores original order and current highlight; current audio/time does not restart |
+| M385 | Change to Lyrics, use Shuffle ON/OFF repeatedly, then switch to Queue | Latest queue order, current row marker and controls are synchronized; lyrics continue when reselected |
+| M386 | Use Next/Previous while Shuffle ON and OFF | Current marker follows occurrence IDs; playback progresses without resetting on toggle |
+| M387 | Play a song that is last or next-to-last in base order and toggle Shuffle | No shuffle reorder with zero/one upcoming entries; ON/OFF button still correct; current row stays marked |
+| M388 | Add a duplicate occurrence through context menus and shuffle/restore | Current occurrence stays marked, not merely all rows with the same file path |
+| M389 | Edit upcoming queue (move/remove/clear), switch panes, reopen Queue | Valid actions/selection, current marker and base order remain consistent; no database/prefs regression |
+
+**Build/verification boundary:** The production JavaFX interface could not be compiled or launched in this environment (JavaFX 25 dependencies/JDK 25 Maven toolchain unavailable). Source-level changes and model checks do not establish that M383–M389 pass on the user's Windows installation. Do not commit until the IntelliJ Maven `package` and manual checks succeed.
+
+**Suggested commit if previous Phase 1A is already committed:** `fix(ui): keep queue shuffle and current track highlight in sync`.
+
+
+## Phase 1B — Main navigation and playlist collection (2026-10-25)
+
+**Accepted starting point:** user committed Phase 1A shell and the repeated-shuffle/queue-highlight fix. Apply this ZIP as an overlay onto that exact checkout (not onto the older pre-UI ZIP).
+
+### Structure and design mapping
+
+- `view/MainNavigation.java`: presentation and selection state only. Section tabs are Library / Albums / Artists / Playlists, with the existing searchable library TextField physically moved to the top bar (no new query/filter model). Search is hidden on the playlist-collection overview; it reappears when editing an opened playlist.
+- `view/PlaylistsOverview.java`: lightweight live `ListView<Playlist>` (still virtualized) with name/song count, empty state and Create Playlist. A double-click or Enter opens an existing playlist, not a new playback queue.
+- `MiSPlayApp.java`: maps section changes onto the existing `playlistChooser`, `LibraryBrowser` browse modes, and the playlist editor. A managed/visible swap retains both editor and overview instances. `Play all` starts from the first visible track and captures the current visible order exactly like choosing that row. Header Create Playlist delegates to the existing dialog/action.
+- `view/PlayerShell.java` accepts a navigation Node and puts it under the header. `player.css` adds scoped navigation/overview styles and keeps Phase 1A sidebar styling.
+- The prototype's final album cover collection, album/artist detail screens, playlist artwork/design fidelity, and custom accent color picker are **not** part of this checkpoint. They require further scoped work.
+- Queue still lasts one application session. The SQLite schema (7), metadata cache format (2), artwork cache/invalidation, lyrics, saved playlists and favorites, and audio service are untouched.
+
+### IntelliJ Windows manual checks (mark these locally before commit)
+
+| ID | Action | Expected |
+|---|---|---|
+| M390 | Maven Lifecycle → package, Plugins → javafx:run with Temurin JDK 25 | Build succeeds; CSS and all sections render; no startup exception |
+| M391 | Click Library → Albums → Artists → Library | Group browser changes to correct mode, then returns to songs; no songs are lost and current playback continues |
+| M392 | Search Library, then visit Albums/Artists and return | Search field still filters songs and works after navigation; no duplicated listeners or controls |
+| M393 | Press Play all with a visible list after filtering/sorting | Starts first visible song and captures the displayed order, respecting current search/sort |
+| M394 | Click Playlists with zero playlists and Create Playlist | Shows meaningful empty state; dialog creates one playlist; editor opens with empty list |
+| M395 | With saved playlists, open via double-click and via Enter | Correct playlist is selected and existing manual order/edit buttons remain available |
+| M396 | Click ← All playlists; reopen a different playlist | Playlist overview returns; chosen playlist songs, counts and ordering are correct |
+| M397 | Use Create Playlist from the top header while on Library or Albums | Same validated create dialog, new playlist opens; no duplicate records |
+| M398 | Rename/delete playlist; navigate between collection and library | Renamed row/count updates; deleted playlist disappears and library files remain |
+| M399 | Switch Lyrics/Queue and toggle Shuffle ON/OFF at least five times during navigation | Playing entry remains marked; original order restores; playback and timed lyrics unaffected |
+| M400 | Exercise favorites, added-order/sort, playlist context actions and folder imports | Phase 1A behaviors remain correct; no double imports or scope errors |
+| M401 | Resize window to min 1140×730 and test 2,000+ songs | Navigation/search, toolbar, song list and sidebar usable; note any clipping or scrolling defects |
+| M402 | Close/restart, then check library and playlist persistence | Saved tracks/favorites/playlists/preferences restore; active playback queue is reset |
+
+**Verification boundary:** static source inspection and preservation of the accepted queue model were possible, but no Java 25 + JavaFX/Maven build or interactive Windows GUI run was available in the authoring environment. The pre-UI Windows performance results are user-supplied. Do not mark M390–M402 passed until tested in IntelliJ. No repository commit or push has been performed.
+
+**Suggested commit after Windows checks:** `feat(ui): add main navigation and playlist overview`
